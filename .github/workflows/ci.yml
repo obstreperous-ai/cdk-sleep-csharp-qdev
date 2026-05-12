@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build, Test, and Synth
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        dotnet-version: ['8.0.x']
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet-version }}
+      
+      - name: Setup Node.js (for AWS CDK CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install AWS CDK CLI
+        run: npm install -g aws-cdk
+      
+      - name: Display versions
+        run: |
+          dotnet --version
+          node --version
+          cdk --version
+      
+      - name: Restore dependencies
+        run: dotnet restore src/CdkBase.sln
+      
+      - name: Build solution
+        run: dotnet build src/CdkBase.sln --configuration Release --no-restore
+      
+      - name: Run tests
+        run: dotnet test src/CdkBase.sln --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+      
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: |
+            **/test-results.trx
+          check_name: Test Results
+      
+      - name: CDK Synth
+        run: cdk synth
+        env:
+          CI: true
+      
+      - name: CDK Diff (if not on main branch)
+        if: github.ref != 'refs/heads/main'
+        run: cdk diff || true
+        env:
+          CI: true
+      
+      - name: Upload CloudFormation templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-templates
+          path: cdk.out/
+          retention-days: 30
+      
+      - name: TDD Status Check
+        run: |
+          echo "✅ All tests passed! TDD workflow successful."
+          echo "📦 CDK synthesis completed."
+          echo "🚀 Ready for deployment."
+

@@ -104,15 +104,18 @@ See [.github/workflows/ci.yml](.github/workflows/ci.yml) for details.
 ## 🤝 Contributing
 
 1. Create an issue describing the feature/fix
-2. Write failing tests first (TDD!)
-3. Implement minimal code to pass tests
-4. Ensure all tests pass: `dotnet test src/CdkBase.sln`
-5. Ensure CDK synth works: `cdk synth`
-6. Submit pull request
+2. Review [docs/AGENT_GUIDELINES.md](docs/AGENT_GUIDELINES.md) for development standards
+3. Consult [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design
+4. Write failing tests first (TDD!)
+5. Implement minimal code to pass tests
+6. Ensure all tests pass: `dotnet test src/CdkBase.sln`
+7. Ensure CDK synth works: `cdk synth`
+8. Submit pull request
 
 ## 📖 Documentation
 
 - [Architecture Documentation](docs/ARCHITECTURE.md) - Detailed system design
+- [Agent Guidelines](docs/AGENT_GUIDELINES.md) - Development standards and patterns
 - [AWS CDK C# Developer Guide](https://docs.aws.amazon.com/cdk/api/v2/dotnet/api/) - Official CDK reference
 
 ## 📝 License

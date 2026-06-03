@@ -15,6 +15,25 @@ This project implements a production-grade, event-driven sleep audio processing 
 ---
 
 ## System Architecture Diagram
+## Current Implementation Status
+
+### ✅ Completed (Issue #3)
+- **Input S3 Bucket**: Private bucket with KMS encryption, versioning, and EventBridge notifications enabled
+- **Output S3 Bucket**: Private bucket with KMS encryption and versioning for processed audio files
+- **KMS Key**: Customer-managed key for S3 bucket encryption with automatic key rotation
+- **EventBridge Rule**: Triggers on `Object Created` events from the Input bucket with CloudWatch Logs target
+
+### 🚧 Upcoming (Future Issues)
+- Step Functions state machine for orchestration
+- Lambda functions for validation, Polly TTS, and Bedrock enhancement
+- DynamoDB table for metadata storage
+- SNS topic for notifications
+- CloudWatch alarms and dashboards
+
+These foundational components enable the event-driven architecture while following strict TDD principles with comprehensive test coverage.
+
+---
+
 
 ```mermaid
 flowchart TD
@@ -75,6 +94,49 @@ flowchart TD
 ```
 
 ---
+
+## Core Infrastructure Components (Implemented)
+
+### KMS Encryption Key
+**Resource**: `AWS::KMS::Key`
+
+A customer-managed KMS key provides encryption for all S3 buckets in the pipeline. This approach offers:
+- **Key Rotation**: Automatic annual key rotation enabled
+- **Audit Trail**: All key usage logged via CloudTrail
+- **Fine-grained Access Control**: IAM policies control who can use the key
+- **Compliance**: Meets data-at-rest encryption requirements
+
+### Input S3 Bucket (`SleepAudioInputBucket`)
+**Resource**: `AWS::S3::Bucket`
+
+This bucket serves as the entry point for the audio processing pipeline:
+
+**Security Features**:
+- **Encryption**: KMS encryption with customer-managed key
+- **Public Access**: Completely blocked (all four public access settings enabled)
+- **SSL/TLS**: EnforceSSL bucket policy requires HTTPS for all operations
+- **Versioning**: Enabled to protect against accidental deletions
+
+**Event Configuration**:
+- **EventBridge**: Enabled to emit S3 events to EventBridge for flexible event routing
+- **Event Types**: All Object Created events (`PutObject`, `PostObject`, `CopyObject`, `CompleteMultipartUpload`)
+
+### Output S3 Bucket (`SleepAudioOutputBucket`)
+**Resource**: `AWS::S3::Bucket`
+
+Stores processed audio files with the same security posture as the input bucket:
+- KMS encryption, versioning, public access blocking, and SSL enforcement
+- Ready to store outputs from Lambda processing functions
+
+### EventBridge Rule (`S3ObjectCreatedRule`)
+**Resource**: `AWS::Events::Rule`
+
+Captures S3 Object Created events and routes them to processing targets:
+- **Event Pattern**: Matches `aws.s3` source with `Object Created` detail type
+- **Bucket Filter**: Only triggers for events from the Input bucket
+- **Current Target**: CloudWatch Log Group (placeholder for future Step Functions or Lambda targets)
+
+This rule serves as the foundation for the event-driven pipeline, decoupling event detection from processing logic.
 
 ## Data Flow
 
@@ -210,20 +272,26 @@ flowchart TD
 
 ## AWS Services & Architecture Decisions
 
-### S3 Buckets (Input & Output)
+### S3 Buckets (Input & Output) ✅ Implemented
 **Why S3?**
 - Durable, scalable object storage for audio files
 - Native event notifications for event-driven architecture
 - Versioning protects against accidental overwrites
 - Lifecycle policies can archive old files to Glacier for cost savings
 
-**Configuration**:
+**Current Configuration**:
 - **Encryption**: SSE-KMS with customer-managed keys
 - **Access**: Private buckets with bucket policies (no public access)
 - **Versioning**: Enabled on output bucket for audit trail
-- **CORS**: Configured for pre-signed URL uploads (future web UI)
+- **EventBridge**: Enabled on input bucket for event-driven processing
+- **SSL Enforcement**: All bucket operations require HTTPS
 
-### Amazon EventBridge
+**Future Enhancements**:
+- CORS configuration for pre-signed URL uploads (web UI)
+- S3 Lifecycle policies to transition old files to Glacier
+- S3 Access Logging for security auditing
+
+### Amazon EventBridge ✅ Implemented
 **Why EventBridge over S3 Direct Lambda Trigger?**
 - Decouples event source from targets (flexibility to add more consumers)
 - Advanced filtering capabilities (e.g., filter by file extension, prefix)
@@ -235,12 +303,13 @@ flowchart TD
 {
   "source": ["aws.s3"],
   "detail-type": ["Object Created"],
-  "detail": {
-    "bucket": {"name": ["sleep-audio-input-bucket"]},
+    "bucket": {"name": ["<input-bucket-name>"]}
     "object": {"key": [{"prefix": ""}]}
   }
 }
 ```
+**Current Status**: Rule is configured with a CloudWatch Logs target as a placeholder. Future issues will replace this with Step Functions state machine invocation.
+
 
 ### AWS Step Functions
 **Why Step Functions over Direct Lambda Chaining?**
@@ -311,7 +380,7 @@ flowchart TD
 **Topics**:
 - `SleepAudioProcessingTopic`: Success and error notifications
 
-### AWS KMS
+### AWS KMS ✅ Implemented
 **Why Customer-Managed Keys?**
 - Fine-grained control over encryption key rotation
 - Audit trail of key usage via CloudTrail
@@ -496,94 +565,68 @@ cdk-sleep-csharp-qdev/
 
 ### Testing
 - **xUnit 2.9.2**: Test framework for .NET
+
 - **Amazon.CDK.Assertions**: CDK-specific assertions for infrastructure testing
 - **Coverlet**: Code coverage collection
----
 
 
 ### CI/CD
-- **GitHub Actions**: Automated build, test, and synth pipeline
+
 - **AWS CDK CLI**: Infrastructure synthesis and deployment
 public void InputS3Bucket_ShouldHaveEncryptionEnabled()
-## Development Workflow (TDD-First)
+This project strictly follows Test-Driven Development (TDD) principles:
 
-### 1. Red Phase - Write Failing Test
-```csharp
-[Fact]
-public void NewFeature_ShouldMeetRequirement()
-{
-    // ARRANGE: Set up test context
-    var app = new App();
-        { "BucketEncryption", Match.ObjectLike(new Dictionary<string, object>
-            { { "ServerSideEncryptionConfiguration", Match.AnyValue() } }) }
-    
-    // ACT: Execute the code under test
-    var template = Template.FromStack(stack);
-    
-    // ASSERT: Verify expected behavior
-    template.HasResourceProperties("AWS::S3::Bucket", new Dictionary<string, object>
-    {
-        { "BucketName", "expected-bucket-name" }
-    });
-        var encryptionKey = new Key(this, "S3EncryptionKey");
-        
-        new Bucket(this, "InputBucket", new BucketProps
+1. **Red Phase** - Write failing tests first using CDK Assertions
+2. **Green Phase** - Write minimal code to make tests pass
+3. **Refactor Phase** - Improve code quality and documentation
 
-            Encryption = BucketEncryption.KMS,
-            EncryptionKey = encryptionKey,
-            BlockPublicAccess = BlockPublicAccess.BLOCK_ALL,
-            Versioned = false
-```csharp
-public class CdkBaseStack : Stack
-{
-    internal CdkBaseStack(Construct scope, string id, IStackProps? props = null) : base(scope, id, props)
-    {
-        // Implement just enough to make the test pass
-        new Bucket(this, "MyBucket", new BucketProps
-        {
-            BucketName = "expected-bucket-name"
+All infrastructure changes are driven by tests in `src/CdkBase.Tests/CdkBaseStackTests.cs`, ensuring correctness and preventing regressions.
+
 ---
 
 ## Testing Strategy
 
-### Unit Tests (CDK Assertions)
-- Verify S3 bucket encryption and public access settings
-- Validate IAM role permissions (least privilege)
-- Check EventBridge rule event patterns
-- Assert Step Functions state machine structure
-- Confirm DynamoDB table schema and indexes
+### Unit Tests (CDK Assertions) ✅ Implemented
+Tests verify infrastructure correctness using the `Amazon.CDK.Assertions` library:
+
+**S3 Bucket Tests**:
+- KMS encryption enabled with customer-managed key
+- Versioning enabled for data protection
+- Public access completely blocked (all four settings)
+- EventBridge notifications enabled on input bucket
+
+**KMS Key Tests**:
+- Verifies KMS key resource exists
+
+**EventBridge Rule Tests**:
+- Event pattern matches S3 Object Created events
+- Rule has at least one target configured
+- Bucket-specific filtering
+
+**Stack Synthesis Test**:
+- Verifies CloudFormation template can be generated without errors
 
 ### Integration Tests (Future)
 - End-to-end workflow testing with sample audio files
-- CloudFormation stack deployment in test environment
+- CloudFormation stack deployment in test AWS account
+- Performance and load testing
 
 ---
-
-        });
-    }
-}
-```
-
-### 3. Refactor Phase - Improve Code Quality
-- Extract constants and configuration
-- Apply strong typing with interfaces and enums
-- Add documentation and comments
----
-
-- Ensure code follows C# best practices
 
 ## CI/CD Pipeline
 
-The GitHub Actions workflow runs on every push and pull request:
-public sealed class AudioProcessingConfig
+The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and pull request:
+
 1. **Restore**: `dotnet restore` - Downloads all NuGet dependencies
-    public required string InputBucketName { get; init; }
-    public required string OutputBucketName { get; init; }
-    public required int LambdaTimeoutSeconds { get; init; }
-    public required int LambdaMemoryMB { get; init; }
+2. **Build**: `dotnet build` - Compiles the C# CDK application
+3. **Test**: `dotnet test` - Runs xUnit tests with CDK Assertions
 4. **Synth**: `cdk synth` - Generates CloudFormation templates
 5. **Diff**: `cdk diff` - Shows infrastructure changes (on PRs)
-var config = new { Bucket = "my-bucket", Timeout = 300 };
+
+All tests must pass before code can be merged, ensuring TDD compliance.
+
+---
+
 ## Strong Typing Guidelines
 
 ### Use Explicit Types
@@ -592,6 +635,20 @@ var config = new { Bucket = "my-bucket", Timeout = 300 };
 public sealed class EventConfig
 {
     public required string EventSource { get; init; }
+    public required int TimeoutSeconds { get; init; }
+}
+
+// ❌ Avoid: Dynamic or object types
+var config = new { EventSource = "s3", Timeout = 30 };
+```
+
+### Leverage Nullable Reference Types
+```csharp
+// Enable in project file: <Nullable>enable</Nullable>
+public string GetBucketName() => "my-bucket";  // Never null
+public string? GetOptionalConfig() => null;     // May be null
+```
+
 ---
 
 ## References & Documentation
@@ -599,7 +656,7 @@ public sealed class EventConfig
 ### Internal Documentation
 - [AGENT_GUIDELINES.md](AGENT_GUIDELINES.md) - Development guidelines for future issues
 - [README.md](../README.md) - Getting started guide
-}
+
 ### AWS Service Documentation
 - AWS CDK C# Developer Guide (Official CDK documentation)
 - Amazon S3 Documentation
@@ -620,19 +677,12 @@ This architecture provides a solid foundation for building a production-grade, e
 - **Security**: Encryption, least-privilege IAM, and private networking
 - **Observability**: Comprehensive logging, metrics, and alarms
 - **Extensibility**: Modular design enables future enhancements
+- **Test-Driven**: Every component is validated with automated tests
 
-The next phase (Issue #3) will begin TDD implementation of core S3 buckets and EventBridge rules.
-// ❌ Avoid: Dynamic or object types
-var config = new { EventSource = "s3", Timeout = 30 };
-```
-
-### Leverage Nullable Reference Types
-```csharp
-// Enable in project file: <Nullable>enable</Nullable>
-public string GetBucketName() => "my-bucket";  // Never null
+**Current Status**: Issue #3 complete - foundational S3 buckets, KMS encryption, and EventBridge rule implemented following strict TDD.
 public string? GetOptionalConfig() => null;     // May be null
-```
+**Next Phase**: Issue #4 will implement the Step Functions state machine skeleton and Polly integration.
 
-## Future Architecture Components
+---
 
 As the sleep audio pipeline evolves through TDD, we'll add event-driven components including S3 buckets, Lambda functions, EventBridge rules, and Step Functions workflows. Each component will be test-driven using CDK Assertions to ensure infrastructure correctness.

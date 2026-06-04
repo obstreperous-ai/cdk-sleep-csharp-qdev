@@ -366,5 +366,168 @@ namespace CdkBase.Tests
             var roles = template.FindResources("AWS::IAM::Role");
             Assert.NotEmpty(roles);
         }
+
+        /// <summary>
+        /// Test that a DynamoDB table is created for storing audio pipeline metadata.
+        /// This table will store processing status, input/output locations, and timestamps.
+        /// </summary>
+        [Fact]
+        public void DynamoDBTable_ShouldExist()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have exactly one DynamoDB table
+            template.ResourceCountIs("AWS::DynamoDB::Table", 1);
+        }
+
+        /// <summary>
+        /// Test that the DynamoDB table has the correct partition key for audio metadata.
+        /// Using audioId as the partition key for unique identification of each processing job.
+        /// </summary>
+        [Fact]
+        public void DynamoDBTable_ShouldHaveCorrectKeySchema()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Table should have audioId as partition key (HASH)
+            template.HasResourceProperties("AWS::DynamoDB::Table", new Dictionary<string, object>
+            {
+                { "KeySchema", new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "AttributeName", "audioId" },
+                            { "KeyType", "HASH" }
+                        }
+                    }
+                },
+                { "AttributeDefinitions", new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "AttributeName", "audioId" },
+                            { "AttributeType", "S" }
+                        }
+                    }
+                }
+            });
+        }
+
+        /// <summary>
+        /// Test that the DynamoDB table has server-side encryption enabled.
+        /// Encryption at rest is a security requirement for storing metadata.
+        /// </summary>
+        [Fact]
+        public void DynamoDBTable_ShouldHaveEncryptionEnabled()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Table should have SSE specification configured
+            template.HasResourceProperties("AWS::DynamoDB::Table", new Dictionary<string, object>
+            {
+                { "SSESpecification", new Dictionary<string, object>
+                    {
+                        { "SSEEnabled", true }
+                    }
+                }
+            });
+        }
+
+        /// <summary>
+        /// Test that the DynamoDB table uses on-demand billing mode.
+        /// On-demand mode provides automatic scaling without capacity planning.
+        /// </summary>
+        [Fact]
+        public void DynamoDBTable_ShouldUseOnDemandBillingMode()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Table should use PAY_PER_REQUEST billing mode
+            template.HasResourceProperties("AWS::DynamoDB::Table", new Dictionary<string, object>
+            {
+                { "BillingMode", "PAY_PER_REQUEST" }
+            });
+        }
+
+        /// <summary>
+        /// Test that the DynamoDB table has point-in-time recovery enabled.
+        /// PITR provides continuous backups for data protection.
+        /// </summary>
+        [Fact]
+        public void DynamoDBTable_ShouldHavePointInTimeRecoveryEnabled()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Table should have PITR enabled
+            template.HasResourceProperties("AWS::DynamoDB::Table", new Dictionary<string, object>
+            {
+                { "PointInTimeRecoverySpecification", new Dictionary<string, object>
+                    {
+                        { "PointInTimeRecoveryEnabled", true }
+                    }
+                }
+            });
+        }
+
+        /// <summary>
+        /// Test that the state machine has IAM permissions to write to DynamoDB table.
+        /// The execution role should include dynamodb:PutItem permission.
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveDynamoDBWritePermissions()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have IAM policy allowing DynamoDB PutItem action
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", Match.ArrayWith(new object[]
+                                        {
+                                            "dynamodb:PutItem"
+                                        })
+                                    }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
     }
 }

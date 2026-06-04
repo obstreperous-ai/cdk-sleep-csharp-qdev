@@ -17,15 +17,15 @@ This project implements a production-grade, event-driven sleep audio processing 
 ## System Architecture Diagram
 ## Current Implementation Status
 
-### ✅ Completed (Issue #3)
-### ✅ Completed (Issues #3 and #4)
+### ✅ Completed (Issues #3, #4, and #5)
 - **Output S3 Bucket**: Private bucket with KMS encryption and versioning for processed audio files
 - **KMS Key**: Customer-managed key for S3 bucket encryption with automatic key rotation
 - **EventBridge Rule**: Triggers on `Object Created` events from the Input bucket with CloudWatch Logs target
 - **EventBridge Rule**: Triggers on `Object Created` events from the Input bucket, targets Step Functions state machine
 - **Step Functions State Machine**: Orchestrates audio processing pipeline with CloudWatch logging enabled
 - **Amazon Polly Integration**: Task state configured for text-to-speech synthesis (placeholder parameters)
-### 🚧 Upcoming (Future Issues)
+- **DynamoDB Metadata Table**: Stores audio pipeline metadata with on-demand billing and point-in-time recovery
+- **State Machine I/O Handling**: Integrated DynamoDB tasks for writing/updating processing status
 ### 🚧 Upcoming (Issue #5 and Beyond)
 - Lambda functions for validation and Bedrock enhancement
 - SNS topic for notifications
@@ -130,7 +130,7 @@ Stores processed audio files with the same security posture as the input bucket:
 - Ready to store outputs from Lambda processing functions
 
 ### EventBridge Rule (`S3ObjectCreatedRule`)
-**Resource**: `AWS::Events::Rule`
+### DynamoDB Metadata Table (`SleepAudioMetadataTable`) ✅ Implemented (Issue #5)
 
 Captures S3 Object Created events and routes them to processing targets:
 - **Event Pattern**: Matches `aws.s3` source with `Object Created` detail type
@@ -138,6 +138,29 @@ Captures S3 Object Created events and routes them to processing targets:
 - **Current Target**: CloudWatch Log Group (placeholder for future Step Functions or Lambda targets)
 - **Targets**: Step Functions state machine (primary) and CloudWatch Log Group (for debugging)
 This rule serves as the foundation for the event-driven pipeline, decoupling event detection from processing logic.
+
+**Resource**: `AWS::DynamoDB::Table`
+
+This table stores metadata and processing status for each audio file that enters the pipeline:
+
+**Table Configuration**:
+- **Partition Key**: `audioId` (String) - Unique identifier generated from S3 bucket name and object key
+- **Billing Mode**: PAY_PER_REQUEST (on-demand) - Automatically scales without capacity planning
+- **Encryption**: AWS-managed SSE (server-side encryption) enabled by default
+- **Point-in-Time Recovery**: Enabled for data protection and backup capabilities
+- **Removal Policy**: RETAIN - Table is preserved when stack is deleted
+
+**Stored Attributes** (DynamoDB is schemaless, but typical items include):
+- `audioId`: Unique identifier (e.g., "s3-bucket-name-path/to/file.mp3")
+- `status`: Processing status (PROCESSING, COMPLETED, FAILED)
+- `inputBucket`: Source S3 bucket name
+- `inputKey`: Source S3 object key
+- `outputKey`: Processed file location (populated after completion)
+- `createdAt`: Timestamp when processing started
+- `updatedAt`: Timestamp of last status update
+- `errorDetails`: Error information (if status is FAILED)
+
+**Access Pattern**: The state machine writes an initial record when triggered by S3 events and updates the status as processing progresses.
 
 ## Data Flow
 
@@ -310,15 +333,74 @@ This rule serves as the foundation for the event-driven pipeline, decoupling eve
 }
 ```
 **Current Status**: Rule is configured with a CloudWatch Logs target as a placeholder. Future issues will replace this with Step Functions state machine invocation.
-### AWS Step Functions
-### AWS Step Functions ✅ Implemented (Issue #4)
-- Visual workflow representation for complex orchestration
-- Built-in error handling, retries, and exponential backoff
 - State management eliminates need for custom coordination logic
 - Integration with CloudWatch for execution history and debugging
 - Supports long-running workflows (up to 1 year)
 
 **State Machine Type**: Standard (for complex workflows with guaranteed execution order)
+**Current State Machine Workflow** (Issue #5):
+The state machine now includes basic input/output handling with DynamoDB integration:
+
+```
+┌─────────────────────────────┐
+│  Start                      │
+│  (Triggered by S3 Event)    │
+└──────────┬──────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────┐
+│  Write Initial Metadata (DynamoDB)  │
+│  - Create audioId from S3 event     │
+│  - Set status = PROCESSING          │
+│  - Store input bucket/key           │
+│  - Record createdAt timestamp       │
+└──────────┬──────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────┐
+│  Polly Text-to-Speech Task      │
+│  - Neural engine (Joanna voice) │
+│  - Placeholder text for now     │
+│  - Output to S3 Output bucket   │
+└──────────┬──────────────────────┘
+           │
+           ▼
+┌────────────────────────────────────┐
+│  Update Status to Completed        │
+│  (DynamoDB UpdateItem)             │
+│  - Set status = COMPLETED          │
+│  - Update updatedAt timestamp      │
+└──────────┬─────────────────────────┘
+           │
+           ▼
+       [End]
+
+[Error Handling]
+Future: Add Catch blocks to update status = FAILED
+```
+
+**S3 Event to State Machine Input Mapping**:
+The EventBridge rule passes the complete S3 event payload to the state machine. Key fields used by DynamoDB tasks:
+- `$.detail.bucket.name` → Input bucket name
+- `$.detail.object.key` → Input object key
+- `$$.State.EnteredTime` → State machine execution timestamp
+
+**IAM Permissions**:
+The state machine execution role has been granted:
+- `dynamodb:PutItem` - Write initial metadata record
+- `dynamodb:UpdateItem` - Update processing status
+- `dynamodb:GetItem` - Read metadata (for future error handling)
+- `dynamodb:DeleteItem` - Cleanup operations (for future use)
+
+These permissions are scoped to the `SleepAudioMetadataTable` resource only (least-privilege principle).
+
+**Future Enhancements** (Issue #6+):
+- Add error handling: Catch blocks that update DynamoDB status to FAILED
+- Implement Choice state to route based on input type (text vs audio)
+- Add validation Lambda function before Polly task
+- Add Bedrock enhancement task for AI-generated soundscapes
+- Store Polly task output location in DynamoDB
+
 **Current Implementation** (`SleepAudioPipelineStateMachine`):
 - **State Machine Type**: Standard workflow with guaranteed execution order
 - **Logging**: CloudWatch Logs with ALL level logging and execution data included
@@ -407,24 +489,29 @@ The current task uses hardcoded placeholder text. Future implementation (Issue #
 - Enhance audio with binaural beats or white noise
 
 ### DynamoDB
+- Access to state-of-the-art generative AI models
 **Why DynamoDB?**
 - Serverless, auto-scaling NoSQL database
 - Low-latency reads/writes for metadata storage
 - Flexible schema for evolving metadata requirements
 - Integrated with Step Functions for state management
 
-**Table Schema**:
+### DynamoDB ✅ Implemented (Issue #5)
 - **Primary Key**: `ProcessingId` (String)
 - **GSI**: `UserId-CreatedAt-index` for user-specific queries
 - **Attributes**: Status, InputKey, OutputKey, Duration, FileSize, Timestamps, ErrorDetails
 
 **Capacity Mode**: On-Demand (scales automatically without capacity planning)
 
-### Amazon SNS
-**Why SNS?**
+- **Primary Key**: `audioId` (String) - Composite of S3 bucket name and object key
 - Pub/Sub messaging for fan-out notifications
+- **Future GSI**: `UserId-CreatedAt-index` for user-specific queries (when user management is added)
 - Multiple subscription types (Email, SMS, SQS, Lambda)
 - Supports future integrations (e.g., webhooks, mobile push)
+
+**Current Implementation**: Basic table with partition key `audioId`, on-demand billing, AWS-managed encryption, and point-in-time recovery enabled.
+
+**Integration**: The Step Functions state machine writes initial metadata on pipeline trigger and updates status on completion.
 
 **Topics**:
 - `SleepAudioProcessingTopic`: Success and error notifications
@@ -733,9 +820,10 @@ This architecture provides a solid foundation for building a production-grade, e
 - **Test-Driven**: Every component is validated with automated tests
 
 **Current Status**: 
-- **Issue #3**: Complete - Foundational S3 buckets, KMS encryption, and EventBridge rule
+- **Issue #4**: Complete - Step Functions state machine with Polly integration
+- **Issue #5**: Complete - DynamoDB metadata table and basic input/output handling
 - **Issue #4**: Complete - Step Functions state machine skeleton with minimal Polly integration
-
+**Next Phase**: Issue #6 will add SNS notifications, error handling, and status updates.
 **Next Phase**: Issue #5 will add DynamoDB metadata table and basic state machine input/output handling.
 
 ---

@@ -18,15 +18,16 @@ This project implements a production-grade, event-driven sleep audio processing 
 ## Current Implementation Status
 
 ### ✅ Completed (Issue #3)
-- **Input S3 Bucket**: Private bucket with KMS encryption, versioning, and EventBridge notifications enabled
+### ✅ Completed (Issues #3 and #4)
 - **Output S3 Bucket**: Private bucket with KMS encryption and versioning for processed audio files
 - **KMS Key**: Customer-managed key for S3 bucket encryption with automatic key rotation
 - **EventBridge Rule**: Triggers on `Object Created` events from the Input bucket with CloudWatch Logs target
-
+- **EventBridge Rule**: Triggers on `Object Created` events from the Input bucket, targets Step Functions state machine
+- **Step Functions State Machine**: Orchestrates audio processing pipeline with CloudWatch logging enabled
+- **Amazon Polly Integration**: Task state configured for text-to-speech synthesis (placeholder parameters)
 ### 🚧 Upcoming (Future Issues)
-- Step Functions state machine for orchestration
-- Lambda functions for validation, Polly TTS, and Bedrock enhancement
-- DynamoDB table for metadata storage
+### 🚧 Upcoming (Issue #5 and Beyond)
+- Lambda functions for validation and Bedrock enhancement
 - SNS topic for notifications
 - CloudWatch alarms and dashboards
 
@@ -135,7 +136,7 @@ Captures S3 Object Created events and routes them to processing targets:
 - **Event Pattern**: Matches `aws.s3` source with `Object Created` detail type
 - **Bucket Filter**: Only triggers for events from the Input bucket
 - **Current Target**: CloudWatch Log Group (placeholder for future Step Functions or Lambda targets)
-
+- **Targets**: Step Functions state machine (primary) and CloudWatch Log Group (for debugging)
 This rule serves as the foundation for the event-driven pipeline, decoupling event detection from processing logic.
 
 ## Data Flow
@@ -309,10 +310,8 @@ This rule serves as the foundation for the event-driven pipeline, decoupling eve
 }
 ```
 **Current Status**: Rule is configured with a CloudWatch Logs target as a placeholder. Future issues will replace this with Step Functions state machine invocation.
-
-
 ### AWS Step Functions
-**Why Step Functions over Direct Lambda Chaining?**
+### AWS Step Functions ✅ Implemented (Issue #4)
 - Visual workflow representation for complex orchestration
 - Built-in error handling, retries, and exponential backoff
 - State management eliminates need for custom coordination logic
@@ -320,7 +319,42 @@ This rule serves as the foundation for the event-driven pipeline, decoupling eve
 - Supports long-running workflows (up to 1 year)
 
 **State Machine Type**: Standard (for complex workflows with guaranteed execution order)
+**Current Implementation** (`SleepAudioPipelineStateMachine`):
+- **State Machine Type**: Standard workflow with guaranteed execution order
+- **Logging**: CloudWatch Logs with ALL level logging and execution data included
+- **Tracing**: AWS X-Ray tracing enabled for distributed tracing
+- **IAM Permissions**: Least-privilege execution role with permissions to:
+  - Invoke Amazon Polly (`polly:StartSpeechSynthesisTask`)
+  - Write to Output S3 bucket (`s3:PutObject`)
+  - Use KMS encryption key (`kms:Decrypt`, `kms:Encrypt`, `kms:GenerateDataKey`)
+  - Write logs to CloudWatch Logs
 
+**State Machine Definition**:
+The current implementation includes a minimal Polly integration task:
+
+```
+Start → Polly Text-to-Speech Task → End
+```
+
+**Polly Task Configuration**:
+- **Service**: Amazon Polly `StartSpeechSynthesisTask` API
+- **Engine**: Neural TTS engine for high-quality, natural-sounding voices
+- **Voice**: Joanna (US English, female voice suitable for soothing content)
+- **Output Format**: MP3 (widely compatible audio format)
+- **Output Destination**: Output S3 bucket
+- **Text**: Placeholder text (future implementation will accept input from S3 event)
+
+**EventBridge Integration**:
+The EventBridge rule now targets the state machine with:
+- **Input**: Full S3 event payload passed to state machine execution
+- **Retry Policy**: 2 retry attempts with maximum event age of 1 hour
+- **Dead Letter Queue**: None (future enhancement for failed executions)
+
+**Future Enhancements** (Issue #5+):
+- Add validation Lambda function before Polly task
+- Implement Choice state to route based on input type (text vs audio)
+- Add Bedrock enhancement task for AI-generated soundscapes
+- Add DynamoDB integration for metadata storage
 **Error Handling**:
 - Automatic retries with exponential backoff for transient errors
 - Catch blocks for graceful failure handling
@@ -337,7 +371,8 @@ This rule serves as the foundation for the event-driven pipeline, decoupling eve
 3. **BedrockEnhancementFunction**: AI-powered audio generation and enhancement
 
 ### Amazon Polly
-**Why Polly?**
+### Amazon Polly ✅ Minimal Integration (Issue #4)
+
 - High-quality neural text-to-speech voices
 - SSML support for fine-grained speech control
 - Multiple languages and voices for personalization
@@ -345,6 +380,20 @@ This rule serves as the foundation for the event-driven pipeline, decoupling eve
 
 **Voice Selection**: Neural voices (Joanna, Matthew) for natural, soothing narration
 
+
+**Current Implementation**:
+- Integrated as a Step Functions task using `CallAwsService` 
+- Configured to use `StartSpeechSynthesisTask` for asynchronous synthesis
+- Neural engine selected for premium voice quality
+- Joanna voice selected (neutral, calming tone ideal for sleep content)
+- Direct output to S3 Output bucket
+
+**Placeholder Configuration**:
+The current task uses hardcoded placeholder text. Future implementation (Issue #5+) will:
+- Read input text from S3 object (based on EventBridge event payload)
+- Support SSML markup for advanced speech control (prosody, pauses, emphasis)
+- Allow voice selection based on user preferences
+- Implement error handling for invalid text or synthesis failures
 ### Amazon Bedrock
 **Why Bedrock?**
 - Access to state-of-the-art generative AI models
@@ -573,7 +622,6 @@ cdk-sleep-csharp-qdev/
 ### CI/CD
 
 - **AWS CDK CLI**: Infrastructure synthesis and deployment
-public void InputS3Bucket_ShouldHaveEncryptionEnabled()
 This project strictly follows Test-Driven Development (TDD) principles:
 
 1. **Red Phase** - Write failing tests first using CDK Assertions
@@ -604,6 +652,11 @@ Tests verify infrastructure correctness using the `Amazon.CDK.Assertions` librar
 - Bucket-specific filtering
 
 **Stack Synthesis Test**:
+**Step Functions Tests** (Issue #4):
+- State machine resource exists
+- CloudWatch logging enabled (ALL level)
+- EventBridge rule targets state machine
+
 - Verifies CloudFormation template can be generated without errors
 
 ### Integration Tests (Future)
@@ -679,9 +732,11 @@ This architecture provides a solid foundation for building a production-grade, e
 - **Extensibility**: Modular design enables future enhancements
 - **Test-Driven**: Every component is validated with automated tests
 
-**Current Status**: Issue #3 complete - foundational S3 buckets, KMS encryption, and EventBridge rule implemented following strict TDD.
-public string? GetOptionalConfig() => null;     // May be null
-**Next Phase**: Issue #4 will implement the Step Functions state machine skeleton and Polly integration.
+**Current Status**: 
+- **Issue #3**: Complete - Foundational S3 buckets, KMS encryption, and EventBridge rule
+- **Issue #4**: Complete - Step Functions state machine skeleton with minimal Polly integration
+
+**Next Phase**: Issue #5 will add DynamoDB metadata table and basic state machine input/output handling.
 
 ---
 

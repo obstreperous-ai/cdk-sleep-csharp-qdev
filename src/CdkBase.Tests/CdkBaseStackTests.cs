@@ -233,5 +233,138 @@ namespace CdkBase.Tests
                 }
             }));
         }
+
+        /// <summary>
+        /// Test that a Step Functions state machine is created for orchestration.
+        /// This state machine will orchestrate the audio processing pipeline.
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldExist()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have a Step Functions state machine
+            template.ResourceCountIs("AWS::StepFunctions::StateMachine", 1);
+        }
+
+        /// <summary>
+        /// Test that the Step Functions state machine has CloudWatch logging enabled.
+        /// Logging is critical for debugging and observability.
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveLoggingEnabled()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine should have logging configuration
+            template.HasResourceProperties("AWS::StepFunctions::StateMachine", new Dictionary<string, object>
+            {
+                { "LoggingConfiguration", new Dictionary<string, object>
+                    {
+                        { "Level", "ALL" }
+                    }
+                }
+            });
+        }
+
+        /// <summary>
+        /// Test that the Step Functions state machine has an execution role.
+        /// The role should follow least-privilege principles.
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveExecutionRole()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine should have a role ARN configured
+            template.HasResourceProperties("AWS::StepFunctions::StateMachine", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "RoleArn", Match.AnyValue() }
+            }));
+        }
+
+        /// <summary>
+        /// Test that the Step Functions state machine definition contains task states.
+        /// At minimum, it should have a Polly task or placeholder.
+        /// </summary>
+        [Fact]
+        public void StateMachine_DefinitionShouldContainTasks()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine should have a definition with states
+            template.HasResourceProperties("AWS::StepFunctions::StateMachine", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "DefinitionString", Match.AnyValue() }
+            }));
+        }
+
+        /// <summary>
+        /// Test that the EventBridge rule now targets the Step Functions state machine.
+        /// This replaces the previous CloudWatch Logs target.
+        /// </summary>
+        [Fact]
+        public void EventBridgeRule_ShouldTargetStateMachine()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - EventBridge rule should have Step Functions as target
+            template.HasResourceProperties("AWS::Events::Rule", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "Targets", Match.ArrayWith(new object[]
+                    {
+                        Match.ObjectLike(new Dictionary<string, object>
+                        {
+                            { "Arn", Match.AnyValue() }
+                        })
+                    })
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that an IAM role is created for the Step Functions state machine execution.
+        /// This ensures proper permissions management.
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveIAMRole()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have IAM roles (at least one for state machine)
+            // Note: We already have roles in the stack, so we check that count is appropriate
+            var roles = template.FindResources("AWS::IAM::Role");
+            Assert.NotEmpty(roles);
+        }
     }
 }

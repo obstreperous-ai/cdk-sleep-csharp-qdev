@@ -4,6 +4,10 @@ using Amazon.CDK.AWS.Events.Targets;
 using Amazon.CDK.AWS.KMS;
 using Amazon.CDK.AWS.Logs;
 using Amazon.CDK.AWS.S3;
+using Amazon.CDK.AWS.StepFunctions;
+using Amazon.CDK.AWS.StepFunctions.Tasks;
+using Amazon.CDK.AWS.IAM;
+using System.Collections.Generic;
 using Constructs;
 
 namespace CdkBase
@@ -29,6 +33,11 @@ namespace CdkBase
         /// EventBridge rule that triggers on S3 Object Created events.
         /// </summary>
         public Rule S3EventRule { get; }
+
+        /// <summary>
+        /// Step Functions state machine for orchestrating the audio processing pipeline.
+        /// </summary>
+        public StateMachine AudioPipelineStateMachine { get; }
 
         internal CdkBaseStack(Construct scope, string id, IStackProps props = null) : base(scope, id, props)
         {
@@ -63,8 +72,57 @@ namespace CdkBase
                 EnforceSSL = true
             });
 
-            // Create placeholder CloudWatch Log Group for EventBridge rule target
-            var logGroup = new LogGroup(this, "SleepAudioEventLogGroup", new LogGroupProps
+            // Create CloudWatch Log Group for Step Functions logging
+            var stateMachineLogGroup = new LogGroup(this, "SleepAudioStateMachineLogGroup", new LogGroupProps
+            {
+                Retention = RetentionDays.TWO_WEEKS,
+                RemovalPolicy = RemovalPolicy.DESTROY
+            });
+
+            // Define Polly task - placeholder for text-to-speech synthesis
+            // Using CallAwsService task to invoke Amazon Polly StartSpeechSynthesisTask
+            var pollyTask = new CallAwsService(this, "PollyTextToSpeech", new CallAwsServiceProps
+            {
+                Service = "polly",
+                Action = "startSpeechSynthesisTask",
+                Parameters = new Dictionary<string, object>
+                {
+                    { "Engine", "neural" },
+                    { "LanguageCode", "en-US" },
+                    { "OutputFormat", "mp3" },
+                    { "OutputS3BucketName", OutputBucket.BucketName },
+                    { "Text", "This is a placeholder for sleep audio content. Future implementation will process actual input." },
+                    { "VoiceId", "Joanna" }
+                },
+                IamResources = new[] { "*" },
+                ResultPath = "$.pollyResult"
+            });
+
+            // Define state machine with Polly task
+            var definition = pollyTask;
+
+            // Create Step Functions state machine
+            AudioPipelineStateMachine = new StateMachine(this, "SleepAudioPipelineStateMachine", new StateMachineProps
+            {
+                StateMachineName = "SleepAudioPipelineStateMachine",
+                DefinitionBody = DefinitionBody.FromChainable(definition),
+                Logs = new LogOptions
+                {
+                    Destination = stateMachineLogGroup,
+                    Level = LogLevel.ALL,
+                    IncludeExecutionData = true
+                },
+                TracingEnabled = true
+            });
+
+            // Grant state machine permission to write to output bucket
+            OutputBucket.GrantWrite(AudioPipelineStateMachine);
+
+            // Grant state machine permission to use KMS key
+            EncryptionKey.GrantEncryptDecrypt(AudioPipelineStateMachine);
+
+            // Create placeholder CloudWatch Log Group for additional event logging
+            var eventLogGroup = new LogGroup(this, "SleepAudioEventLogGroup", new LogGroupProps
             {
                 Retention = RetentionDays.ONE_WEEK,
                 RemovalPolicy = RemovalPolicy.DESTROY
@@ -89,7 +147,14 @@ namespace CdkBase
                 },
                 Targets = new IRule.ITarget[]
                 {
-                    new CloudWatchLogGroup(logGroup)
+                    new SfnStateMachine(AudioPipelineStateMachine, new SfnStateMachineProps
+                    {
+                        Input = RuleTargetInput.FromEventPath("$"),
+                        DeadLetterQueue = null,
+                        MaxEventAge = Duration.Hours(1),
+                        RetryAttempts = 2
+                    }),
+                    new CloudWatchLogGroup(eventLogGroup)
                 }
             });
 
@@ -113,6 +178,13 @@ namespace CdkBase
                 Value = S3EventRule.RuleName,
                 Description = "Name of the EventBridge rule",
                 ExportName = $"{id}-EventRuleName"
+            });
+
+            new CfnOutput(this, "StateMachineArn", new CfnOutputProps
+            {
+                Value = AudioPipelineStateMachine.StateMachineArn,
+                Description = "ARN of the Step Functions state machine",
+                ExportName = $"{id}-StateMachineArn"
             });
         }
     }

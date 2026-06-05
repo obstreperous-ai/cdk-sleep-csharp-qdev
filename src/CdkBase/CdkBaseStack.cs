@@ -1,4 +1,5 @@
 using Amazon.CDK;
+using Amazon.CDK.AWS.DynamoDB;
 using Amazon.CDK.AWS.Events;
 using Amazon.CDK.AWS.Events.Targets;
 using Amazon.CDK.AWS.KMS;
@@ -39,6 +40,11 @@ namespace CdkBase
         /// </summary>
         public StateMachine AudioPipelineStateMachine { get; }
 
+        /// <summary>
+        /// DynamoDB table for storing audio pipeline metadata and processing status.
+        /// </summary>
+        public ITable MetadataTable { get; }
+
         internal CdkBaseStack(Construct scope, string id, IStackProps props = null) : base(scope, id, props)
         {
             // Create KMS key for S3 bucket encryption
@@ -72,11 +78,74 @@ namespace CdkBase
                 EnforceSSL = true
             });
 
+            // Create DynamoDB table for audio metadata storage
+            MetadataTable = new Table(this, "SleepAudioMetadataTable", new TableProps
+            {
+                PartitionKey = new Amazon.CDK.AWS.DynamoDB.Attribute
+                {
+                    Name = "audioId",
+                    Type = AttributeType.STRING
+                },
+                BillingMode = BillingMode.PAY_PER_REQUEST,
+                Encryption = TableEncryption.AWS_MANAGED,
+                PointInTimeRecovery = true,
+                RemovalPolicy = RemovalPolicy.RETAIN,
+                // Table will store: audioId, status, inputBucket, inputKey, outputKey,
+                // createdAt, updatedAt, and other processing metadata
+                TableName = "SleepAudioMetadataTable"
+            });
+
+            // Grant KMS key usage for DynamoDB encryption
+            EncryptionKey.GrantEncryptDecrypt(new ServicePrincipal("dynamodb.amazonaws.com"));
+
             // Create CloudWatch Log Group for Step Functions logging
             var stateMachineLogGroup = new LogGroup(this, "SleepAudioStateMachineLogGroup", new LogGroupProps
             {
                 Retention = RetentionDays.TWO_WEEKS,
                 RemovalPolicy = RemovalPolicy.DESTROY
+            });
+
+            // Define DynamoDB PutItem task to write initial metadata
+            // This task stores the initial processing record with status=PROCESSING
+            var writeToDynamoDB = new DynamoPutItem(this, "WriteInitialMetadata", new DynamoPutItemProps
+            {
+                Table = MetadataTable,
+                Item = new Dictionary<string, DynamoAttributeValue>
+                {
+                    { "audioId", DynamoAttributeValue.FromString(JsonPath.Format("s3-{}-{}", 
+                        JsonPath.StringAt("$.detail.bucket.name"),
+                        JsonPath.StringAt("$.detail.object.key"))) },
+                    { "status", DynamoAttributeValue.FromString("PROCESSING") },
+                    { "inputBucket", DynamoAttributeValue.FromString(JsonPath.StringAt("$.detail.bucket.name")) },
+                    { "inputKey", DynamoAttributeValue.FromString(JsonPath.StringAt("$.detail.object.key")) },
+                    { "createdAt", DynamoAttributeValue.FromString(JsonPath.StringAt("$$.State.EnteredTime")) },
+                    { "updatedAt", DynamoAttributeValue.FromString(JsonPath.StringAt("$$.State.EnteredTime")) }
+                },
+                ResultPath = "$.dynamoResult"
+            });
+
+            // Define DynamoDB UpdateItem task to mark processing as complete
+            var updateStatusToCompleted = new DynamoUpdateItem(this, "UpdateStatusToCompleted", new DynamoUpdateItemProps
+            {
+                Table = MetadataTable,
+                Key = new Dictionary<string, DynamoAttributeValue>
+                {
+                    { "audioId", DynamoAttributeValue.FromString(JsonPath.Format("s3-{}-{}",
+                        JsonPath.StringAt("$.detail.bucket.name"),
+                        JsonPath.StringAt("$.detail.object.key"))) }
+                },
+                UpdateExpression = "SET #status = :completed, #updatedAt = :timestamp",
+                ExpressionAttributeNames = new Dictionary<string, string>
+                {
+                    { "#status", "status" },
+                    { "#updatedAt", "updatedAt" }
+                },
+                ExpressionAttributeValues = new Dictionary<string, DynamoAttributeValue>
+                {
+                    { ":completed", DynamoAttributeValue.FromString("COMPLETED") },
+                    { ":timestamp", DynamoAttributeValue.FromString(JsonPath.StringAt("$$.State.EnteredTime")) }
+                },
+                ResultPath = "$.updateResult"
             });
 
             // Define Polly task - placeholder for text-to-speech synthesis
@@ -98,8 +167,11 @@ namespace CdkBase
                 ResultPath = "$.pollyResult"
             });
 
-            // Define state machine with Polly task
-            var definition = pollyTask;
+            // Define state machine definition
+            // Chain: Write initial metadata → Polly TTS → Update status to completed
+            var definition = writeToDynamoDB
+                .Next(pollyTask)
+                .Next(updateStatusToCompleted);
 
             // Create Step Functions state machine
             AudioPipelineStateMachine = new StateMachine(this, "SleepAudioPipelineStateMachine", new StateMachineProps
@@ -120,6 +192,9 @@ namespace CdkBase
 
             // Grant state machine permission to use KMS key
             EncryptionKey.GrantEncryptDecrypt(AudioPipelineStateMachine);
+
+            // Grant state machine permission to read/write DynamoDB table
+            MetadataTable.GrantReadWriteData(AudioPipelineStateMachine);
 
             // Create placeholder CloudWatch Log Group for additional event logging
             var eventLogGroup = new LogGroup(this, "SleepAudioEventLogGroup", new LogGroupProps
@@ -185,6 +260,13 @@ namespace CdkBase
                 Value = AudioPipelineStateMachine.StateMachineArn,
                 Description = "ARN of the Step Functions state machine",
                 ExportName = $"{id}-StateMachineArn"
+            });
+
+            new CfnOutput(this, "MetadataTableName", new CfnOutputProps
+            {
+                Value = MetadataTable.TableName,
+                Description = "Name of the DynamoDB metadata table",
+                ExportName = $"{id}-MetadataTableName"
             });
         }
     }

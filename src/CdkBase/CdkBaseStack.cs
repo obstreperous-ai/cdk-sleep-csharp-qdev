@@ -2,6 +2,7 @@ using Amazon.CDK;
 using Amazon.CDK.AWS.DynamoDB;
 using Amazon.CDK.AWS.Events;
 using Amazon.CDK.AWS.Events.Targets;
+using Amazon.CDK.AWS.Lambda;
 using Amazon.CDK.AWS.KMS;
 using Amazon.CDK.AWS.Logs;
 using Amazon.CDK.AWS.S3;
@@ -55,6 +56,11 @@ namespace CdkBase
         /// SNS topic for pipeline failure notifications.
         /// </summary>
         public ITopic PipelineFailedTopic { get; }
+
+        /// <summary>
+        /// Lambda function for audio processing, metadata enrichment, or validation logic.
+        /// </summary>
+        public IFunction AudioProcessorFunction { get; }
 
         internal CdkBaseStack(Construct scope, string id, IStackProps props = null) : base(scope, id, props)
         {
@@ -131,6 +137,31 @@ namespace CdkBase
                 RemovalPolicy = RemovalPolicy.DESTROY
             });
 
+            // Create Lambda function for audio processing
+            AudioProcessorFunction = new Function(this, "SleepAudioProcessorFunction", new FunctionProps
+            {
+                Runtime = Runtime.PYTHON_3_12,
+                Handler = "index.lambda_handler",
+                Code = Code.FromAsset("src/Lambda/SleepAudioProcessor"),
+                FunctionName = "SleepAudioProcessorFunction",
+                Description = "Processes audio files, validates input, and enriches metadata for the sleep audio pipeline",
+                Timeout = Duration.Minutes(5),
+                MemorySize = 512,
+                Environment = new Dictionary<string, string>
+                {
+                    { "METADATA_TABLE_NAME", MetadataTable.TableName },
+                    { "OUTPUT_BUCKET_NAME", OutputBucket.BucketName }
+                },
+                LogRetention = RetentionDays.TWO_WEEKS
+            });
+
+            // Grant Lambda permissions to access DynamoDB table
+            MetadataTable.GrantReadWriteData(AudioProcessorFunction);
+
+            // Grant Lambda permissions to read from input bucket and write to output bucket
+            InputBucket.GrantRead(AudioProcessorFunction);
+            OutputBucket.GrantWrite(AudioProcessorFunction);
+
             // Define DynamoDB PutItem task to write initial metadata
             // This task stores the initial processing record with status=PROCESSING
             var writeToDynamoDB = new DynamoPutItem(this, "WriteInitialMetadata", new DynamoPutItemProps
@@ -148,6 +179,18 @@ namespace CdkBase
                     { "updatedAt", DynamoAttributeValue.FromString(JsonPath.StringAt("$$.State.EnteredTime")) }
                 },
                 ResultPath = "$.dynamoResult"
+            });
+
+            // Define Lambda invocation task to process audio
+            // This task invokes the audio processor Lambda function with S3 event details
+            var processAudio = new LambdaInvoke(this, "ProcessAudioWithLambda", new LambdaInvokeProps
+            {
+                LambdaFunction = AudioProcessorFunction,
+                Payload = TaskInput.FromObject(new Dictionary<string, object>
+                {
+                    { "detail", JsonPath.ObjectAt("$.detail") }
+                }),
+                ResultPath = "$.processorResult"
             });
 
             // Define DynamoDB UpdateItem task to mark processing as complete
@@ -262,8 +305,9 @@ namespace CdkBase
             });
 
             // Define state machine definition with error handling
-            // Chain: Write initial metadata → Polly TTS (with error handling) → Update status to completed → Publish success notification
+            // Chain: Write initial metadata → Lambda processor → Polly TTS (with error handling) → Update status to completed → Publish success notification
             var definition = writeToDynamoDB
+                .Next(processAudio)
                 .Next(pollyTask)
                 .Next(updateStatusToCompleted)
                 .Next(publishSuccessNotification);
@@ -293,6 +337,9 @@ namespace CdkBase
 
             // Grant state machine permission to publish to SNS topics
             PipelineCompletedTopic.GrantPublish(AudioPipelineStateMachine);
+            // Grant state machine permission to invoke Lambda function
+            AudioProcessorFunction.GrantInvoke(AudioPipelineStateMachine);
+
             PipelineFailedTopic.GrantPublish(AudioPipelineStateMachine);
 
             // Create placeholder CloudWatch Log Group for additional event logging
@@ -379,6 +426,13 @@ namespace CdkBase
             {
                 Value = PipelineFailedTopic.TopicArn,
                 Description = "ARN of the pipeline failed SNS topic",
+
+            new CfnOutput(this, "AudioProcessorFunctionArn", new CfnOutputProps
+            {
+                Value = AudioProcessorFunction.FunctionArn,
+                Description = "ARN of the audio processor Lambda function",
+                ExportName = $"{id}-AudioProcessorFunctionArn"
+            });
                 ExportName = $"{id}-PipelineFailedTopicArn"
             });
         }

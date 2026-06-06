@@ -17,7 +17,7 @@ This project implements a production-grade, event-driven sleep audio processing 
 ## System Architecture Diagram
 ## Current Implementation Status
 
-### ✅ Completed (Issues #3, #4, #5, and #6)
+### ✅ Completed (Issues #3, #4, #5, #6, and #7)
 - **Output S3 Bucket**: Private bucket with KMS encryption and versioning for processed audio files
 - **KMS Key**: Customer-managed key for S3 bucket encryption with automatic key rotation
 - **EventBridge Rule**: Triggers on `Object Created` events from the Input bucket, targets Step Functions state machine
@@ -28,8 +28,9 @@ This project implements a production-grade, event-driven sleep audio processing 
 - **SNS Notifications**: Two encrypted SNS topics for pipeline completion and failure notifications
 - **Error Handling**: Step Functions Catch blocks for graceful error handling with status updates
 
-### 🚧 Upcoming (Issue #7 and Beyond)
-- Lambda functions for validation and Bedrock enhancement
+- **Lambda Audio Processor**: Basic Lambda function skeleton for audio processing, metadata enrichment, and validation
+### 🚧 Upcoming (Issue #8 and Beyond)
+- Complete pipeline wiring, input validation, and end-to-end flow
 - CloudWatch alarms and dashboards
 
 These foundational components enable the event-driven architecture while following strict TDD principles with comprehensive test coverage.
@@ -256,7 +257,16 @@ The state machine now includes comprehensive error handling and notifications:
 │  - Store input bucket/key           │
 │  - Record createdAt timestamp       │
 └──────────┬──────────────────────────┘
+┌─────────────────────────────────────┐
+│  Lambda: Process Audio               │
+│  - Validate S3 event details         │
+│  - Log input for debugging           │
+│  - Enrich metadata (placeholder)     │
+│  - Return success/failure response   │
+└──────────┬──────────────────────────┘
            │
+           ▼
+┌──────────────────────────────────┐
            ▼
 ┌─────────────────────────────────┐
 │  Polly Text-to-Speech Task      │
@@ -288,6 +298,32 @@ The state machine now includes comprehensive error handling and notifications:
        [End: Success]                           [End: Failed]
 ```
 
+
+**Lambda Integration** (Issue #7):
+The state machine now includes a Lambda function invocation step between the initial metadata write and Polly task:
+
+1. **Lambda Function**: `SleepAudioProcessorFunction`
+   - **Runtime**: Python 3.12
+   - **Purpose**: Placeholder for audio processing, metadata enrichment, or validation logic
+   - **Input**: Receives S3 event details (bucket name, object key) from the state machine
+   - **Output**: Returns success/failure status with enriched metadata
+   - **Environment Variables**:
+     - `METADATA_TABLE_NAME`: DynamoDB table name for metadata storage
+     - `OUTPUT_BUCKET_NAME`: S3 bucket name for output files
+
+2. **IAM Permissions**:
+   - **Lambda Execution Role**:
+     - `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` on MetadataTable
+     - `s3:GetObject*`, `s3:GetBucket*`, `s3:List*` on Input bucket
+     - `s3:PutObject*`, `s3:Abort*` on Output bucket
+     - `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` for CloudWatch Logs
+   - **State Machine Execution Role**:
+     - `lambda:InvokeFunction` on SleepAudioProcessorFunction
+
+3. **Future Enhancements**:
+   - File format validation (MP3, WAV, M4A, or TXT)
+   - Audio metadata extraction (duration, bitrate, channels)
+   - DynamoDB status updates from within the Lambda function
 **Error Handling Strategy**:
 - **Catch Blocks**: The Polly task has a `Catch` block that catches all errors (`States.ALL`)
 - **Error Path**: On error, the workflow transitions to update DynamoDB status to FAILED and publishes a failure notification
@@ -484,6 +520,40 @@ The EventBridge rule now targets the state machine with:
 - Automatic retries with exponential backoff for transient errors
 - Catch blocks for graceful failure handling
 - Dead-letter queue for unrecoverable errors
+
+### AWS Lambda (Audio Processing Function) ✅ Implemented (Issue #7)
+
+**Function**: `SleepAudioProcessorFunction`
+**Runtime**: Python 3.12
+**Memory**: 512 MB
+**Timeout**: 5 minutes
+
+**Purpose**:
+This Lambda function serves as a placeholder for future audio processing, metadata enrichment, or validation logic. It's integrated into the Step Functions state machine as a Task step after the initial DynamoDB metadata write.
+
+**Current Implementation**:
+The function performs basic operations:
+- Receives S3 event details from the Step Functions state machine
+- Logs the input for debugging and observability
+- Extracts bucket name and object key from the event
+- Generates audio ID for tracking
+- Performs basic input validation
+- Returns success/failure response with metadata
+
+**Environment Variables**:
+- `METADATA_TABLE_NAME`: DynamoDB table name for metadata storage
+- `OUTPUT_BUCKET_NAME`: S3 bucket name for output files
+
+**IAM Permissions**:
+- **DynamoDB**: Read/write access to MetadataTable (GetItem, PutItem, UpdateItem, DeleteItem)
+- **S3**: Read access to Input bucket, write access to Output bucket
+- **CloudWatch Logs**: Create log groups/streams and put log events
+
+**Future Enhancements**:
+- File format validation (MP3, WAV, M4A, or TXT)
+- Audio metadata extraction using libraries like `pydub` or `mutagen`
+- DynamoDB status updates directly from the Lambda
+- Integration with AWS Elemental MediaConvert for audio transcoding
 
 ### AWS Lambda (Processing Functions)
 **Runtime**: .NET 8 (C#) for consistency with CDK code
@@ -878,13 +948,13 @@ This architecture provides a solid foundation for building a production-grade, e
 - **Security**: Encryption, least-privilege IAM, and private networking
 - **Observability**: Comprehensive logging, metrics, and alarms
 - **Extensibility**: Modular design enables future enhancements
+- **Issue #7**: Complete - Lambda audio processor function integrated into state machine
 - **Test-Driven**: Every component is validated with automated tests
 - **Issue #6**: Complete - SNS notifications, error handling, and status updates
 
-**Next Phase**: Issue #7 will add basic Lambda function skeleton and integration with state machine.
+**Next Phase**: Issue #8 will complete pipeline wiring, input validation, and basic end-to-end flow.
 - **Issue #5**: Complete - DynamoDB metadata table and basic input/output handling
 - **Issue #4**: Complete - Step Functions state machine skeleton with minimal Polly integration
-**Next Phase**: Issue #6 will add SNS notifications, error handling, and status updates.
 
 ---
 

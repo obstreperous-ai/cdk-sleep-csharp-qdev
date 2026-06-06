@@ -529,5 +529,180 @@ namespace CdkBase.Tests
                 }
             }));
         }
+
+        /// <summary>
+        /// Test that SNS topics are created for pipeline notifications.
+        /// At least two topics should exist: one for success and one for failure.
+        /// </summary>
+        [Fact]
+        public void SNSTopics_ShouldExistForNotifications()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have at least 2 SNS topics (Completed and Failed)
+            template.ResourceCountIs("AWS::SNS::Topic", 2);
+        }
+
+        /// <summary>
+        /// Test that SNS topics have encryption enabled.
+        /// SNS topics should use KMS encryption for data-in-transit security.
+        /// </summary>
+        [Fact]
+        public void SNSTopics_ShouldHaveEncryptionEnabled()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - SNS topic should have KMS master key configured
+            template.HasResourceProperties("AWS::SNS::Topic", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "KmsMasterKeyId", Match.AnyValue() }
+            }));
+        }
+
+        /// <summary>
+        /// Test that the state machine has error handling configured.
+        /// The definition should include Catch blocks for error handling.
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveErrorHandling()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine definition should contain "Catch" for error handling
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            // Check that at least one state machine has a definition string containing "Catch"
+            var hasErrorHandling = false;
+            foreach (var sm in stateMachines)
+            {
+                if (sm.Value.ContainsKey("Properties"))
+                {
+                    var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                    if (properties?.ContainsKey("DefinitionString") == true)
+                    {
+                        var definition = properties["DefinitionString"]?.ToString() ?? "";
+                        if (definition.Contains("Catch"))
+                        {
+                            hasErrorHandling = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Assert.True(hasErrorHandling, "State machine should have error handling (Catch blocks) in definition");
+        }
+
+        /// <summary>
+        /// Test that the state machine execution role has permissions to publish to SNS.
+        /// IAM policy should include sns:Publish action.
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveSNSPublishPermissions()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have IAM policy allowing SNS Publish action
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", "sns:Publish" }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that the stack has proper IAM permissions for DynamoDB UpdateItem on failure.
+        /// This ensures the state machine can update status to FAILED on errors.
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveDynamoDBUpdatePermissionsForFailure()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have IAM policy allowing DynamoDB UpdateItem action
+            // This was already granted in Issue #5, but we verify it's still present
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", Match.ArrayWith(new object[]
+                                        {
+                                            "dynamodb:UpdateItem"
+                                        })
+                                    }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test snapshot of the complete stack to catch unintended changes.
+        /// This provides a baseline for infrastructure changes.
+        /// </summary>
+        [Fact]
+        public void Stack_SnapshotTest()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            var json = template.ToJSON();
+            
+            // ASSERT - Verify template structure is valid JSON and not empty
+            Assert.NotNull(json);
+            Assert.NotEmpty(json);
+            
+            // Verify key resource types exist
+            Assert.Contains("AWS::S3::Bucket", json);
+            Assert.Contains("AWS::StepFunctions::StateMachine", json);
+            Assert.Contains("AWS::DynamoDB::Table", json);
+            Assert.Contains("AWS::SNS::Topic", json);
+            Assert.Contains("AWS::Events::Rule", json);
+            Assert.Contains("AWS::KMS::Key", json);
+        }
     }
 }

@@ -7,6 +7,7 @@ using Amazon.CDK.AWS.Logs;
 using Amazon.CDK.AWS.S3;
 using Amazon.CDK.AWS.StepFunctions;
 using Amazon.CDK.AWS.StepFunctions.Tasks;
+using Amazon.CDK.AWS.SNS;
 using Amazon.CDK.AWS.IAM;
 using System.Collections.Generic;
 using Constructs;
@@ -45,6 +46,16 @@ namespace CdkBase
         /// </summary>
         public ITable MetadataTable { get; }
 
+        /// <summary>
+        /// SNS topic for successful pipeline completion notifications.
+        /// </summary>
+        public ITopic PipelineCompletedTopic { get; }
+
+        /// <summary>
+        /// SNS topic for pipeline failure notifications.
+        /// </summary>
+        public ITopic PipelineFailedTopic { get; }
+
         internal CdkBaseStack(Construct scope, string id, IStackProps props = null) : base(scope, id, props)
         {
             // Create KMS key for S3 bucket encryption
@@ -53,6 +64,21 @@ namespace CdkBase
                 Description = "KMS key for encrypting Sleep Audio Pipeline S3 buckets",
                 EnableKeyRotation = true,
                 RemovalPolicy = RemovalPolicy.RETAIN
+            });
+
+            // Create SNS topics for pipeline notifications with encryption
+            PipelineCompletedTopic = new Topic(this, "SleepAudioPipelineCompleted", new TopicProps
+            {
+                DisplayName = "Sleep Audio Pipeline Completed",
+                TopicName = "SleepAudioPipelineCompleted",
+                MasterKey = EncryptionKey
+            });
+
+            PipelineFailedTopic = new Topic(this, "SleepAudioPipelineFailed", new TopicProps
+            {
+                DisplayName = "Sleep Audio Pipeline Failed",
+                TopicName = "SleepAudioPipelineFailed",
+                MasterKey = EncryptionKey
             });
 
             // Create Input S3 Bucket
@@ -148,6 +174,67 @@ namespace CdkBase
                 ResultPath = "$.updateResult"
             });
 
+            // Define DynamoDB UpdateItem task to mark processing as failed
+            var updateStatusToFailed = new DynamoUpdateItem(this, "UpdateStatusToFailed", new DynamoUpdateItemProps
+            {
+                Table = MetadataTable,
+                Key = new Dictionary<string, DynamoAttributeValue>
+                {
+                    { "audioId", DynamoAttributeValue.FromString(JsonPath.Format("s3-{}-{}",
+                        JsonPath.StringAt("$.detail.bucket.name"),
+                        JsonPath.StringAt("$.detail.object.key"))) }
+                },
+                UpdateExpression = "SET #status = :failed, #updatedAt = :timestamp, #errorDetails = :error",
+                ExpressionAttributeNames = new Dictionary<string, string>
+                {
+                    { "#status", "status" },
+                    { "#updatedAt", "updatedAt" },
+                    { "#errorDetails", "errorDetails" }
+                },
+                ExpressionAttributeValues = new Dictionary<string, DynamoAttributeValue>
+                {
+                    { ":failed", DynamoAttributeValue.FromString("FAILED") },
+                    { ":timestamp", DynamoAttributeValue.FromString(JsonPath.StringAt("$$.State.EnteredTime")) },
+                    { ":error", DynamoAttributeValue.FromString(JsonPath.StringAt("$.Error")) }
+                },
+                ResultPath = "$.updateResult"
+            });
+
+            // Define SNS Publish task for success notification
+            var publishSuccessNotification = new SnsPublish(this, "PublishSuccessNotification", new SnsPublishProps
+            {
+                Topic = PipelineCompletedTopic,
+                Message = TaskInput.FromObject(new Dictionary<string, object>
+                {
+                    { "status", "COMPLETED" },
+                    { "message", "Sleep audio pipeline completed successfully" },
+                    { "audioId", JsonPath.Format("s3-{}-{}", 
+                        JsonPath.StringAt("$.detail.bucket.name"),
+                        JsonPath.StringAt("$.detail.object.key")) },
+                    { "timestamp", JsonPath.StringAt("$$.State.EnteredTime") }
+                }),
+                Subject = "Sleep Audio Pipeline Completed",
+                ResultPath = "$.snsResult"
+            });
+
+            // Define SNS Publish task for failure notification
+            var publishFailureNotification = new SnsPublish(this, "PublishFailureNotification", new SnsPublishProps
+            {
+                Topic = PipelineFailedTopic,
+                Message = TaskInput.FromObject(new Dictionary<string, object>
+                {
+                    { "status", "FAILED" },
+                    { "message", "Sleep audio pipeline failed" },
+                    { "audioId", JsonPath.Format("s3-{}-{}", 
+                        JsonPath.StringAt("$.detail.bucket.name"),
+                        JsonPath.StringAt("$.detail.object.key")) },
+                    { "error", JsonPath.StringAt("$.Error") },
+                    { "timestamp", JsonPath.StringAt("$$.State.EnteredTime") }
+                }),
+                Subject = "Sleep Audio Pipeline Failed",
+                ResultPath = "$.snsResult"
+            });
+
             // Define Polly task - placeholder for text-to-speech synthesis
             // Using CallAwsService task to invoke Amazon Polly StartSpeechSynthesisTask
             var pollyTask = new CallAwsService(this, "PollyTextToSpeech", new CallAwsServiceProps
@@ -167,11 +254,19 @@ namespace CdkBase
                 ResultPath = "$.pollyResult"
             });
 
-            // Define state machine definition
-            // Chain: Write initial metadata → Polly TTS → Update status to completed
+            // Add error handling to Polly task with Catch block
+            pollyTask.AddCatch(updateStatusToFailed.Next(publishFailureNotification), new CatchProps
+            {
+                Errors = new[] { "States.ALL" },
+                ResultPath = "$.error"
+            });
+
+            // Define state machine definition with error handling
+            // Chain: Write initial metadata → Polly TTS (with error handling) → Update status to completed → Publish success notification
             var definition = writeToDynamoDB
                 .Next(pollyTask)
-                .Next(updateStatusToCompleted);
+                .Next(updateStatusToCompleted)
+                .Next(publishSuccessNotification);
 
             // Create Step Functions state machine
             AudioPipelineStateMachine = new StateMachine(this, "SleepAudioPipelineStateMachine", new StateMachineProps
@@ -195,6 +290,10 @@ namespace CdkBase
 
             // Grant state machine permission to read/write DynamoDB table
             MetadataTable.GrantReadWriteData(AudioPipelineStateMachine);
+
+            // Grant state machine permission to publish to SNS topics
+            PipelineCompletedTopic.GrantPublish(AudioPipelineStateMachine);
+            PipelineFailedTopic.GrantPublish(AudioPipelineStateMachine);
 
             // Create placeholder CloudWatch Log Group for additional event logging
             var eventLogGroup = new LogGroup(this, "SleepAudioEventLogGroup", new LogGroupProps
@@ -267,6 +366,20 @@ namespace CdkBase
                 Value = MetadataTable.TableName,
                 Description = "Name of the DynamoDB metadata table",
                 ExportName = $"{id}-MetadataTableName"
+            });
+
+            new CfnOutput(this, "PipelineCompletedTopicArn", new CfnOutputProps
+            {
+                Value = PipelineCompletedTopic.TopicArn,
+                Description = "ARN of the pipeline completed SNS topic",
+                ExportName = $"{id}-PipelineCompletedTopicArn"
+            });
+
+            new CfnOutput(this, "PipelineFailedTopicArn", new CfnOutputProps
+            {
+                Value = PipelineFailedTopic.TopicArn,
+                Description = "ARN of the pipeline failed SNS topic",
+                ExportName = $"{id}-PipelineFailedTopicArn"
             });
         }
     }

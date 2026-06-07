@@ -704,5 +704,199 @@ namespace CdkBase.Tests
             Assert.Contains("AWS::Events::Rule", json);
             Assert.Contains("AWS::KMS::Key", json);
         }
+
+        /// <summary>
+        /// Test that a Lambda function is created for audio processing.
+        /// This Lambda will serve as a placeholder for future audio processing, metadata enrichment, or validation logic.
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldExist()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have at least one Lambda function
+            template.ResourceCountIs("AWS::Lambda::Function", 1);
+        }
+
+        /// <summary>
+        /// Test that the Lambda function has the correct runtime configured.
+        /// Using Python 3.12 runtime for the audio processor function.
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveCorrectRuntime()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Lambda should use Python 3.12 runtime
+            template.HasResourceProperties("AWS::Lambda::Function", new Dictionary<string, object>
+            {
+                { "Runtime", "python3.12" }
+            });
+        }
+
+        /// <summary>
+        /// Test that the Lambda function has environment variables configured.
+        /// Environment variables provide configuration for table name and bucket access.
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveEnvironmentVariables()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Lambda should have environment variables for table and bucket
+            template.HasResourceProperties("AWS::Lambda::Function", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "Environment", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Variables", Match.ObjectLike(new Dictionary<string, object>
+                            {
+                                { "METADATA_TABLE_NAME", Match.AnyValue() },
+                                { "OUTPUT_BUCKET_NAME", Match.AnyValue() }
+                            })
+                        }
+                    })
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that the Lambda function has an execution role with proper permissions.
+        /// The role should allow access to DynamoDB and CloudWatch Logs.
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveExecutionRole()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Lambda should have a role configured
+            template.HasResourceProperties("AWS::Lambda::Function", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "Role", Match.AnyValue() }
+            }));
+        }
+
+        /// <summary>
+        /// Test that the Lambda execution role has DynamoDB read/write permissions.
+        /// Lambda needs to read and update metadata in the DynamoDB table.
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveDynamoDBPermissions()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have IAM policy allowing DynamoDB access
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", Match.ArrayWith(new object[]
+                                        {
+                                            "dynamodb:GetItem"
+                                        })
+                                    }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that the Lambda execution role has CloudWatch Logs permissions.
+        /// Lambda needs to write logs for debugging and monitoring.
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveCloudWatchLogsPermissions()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have IAM policy allowing CloudWatch Logs actions
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", Match.ArrayWith(new object[]
+                                        {
+                                            "logs:CreateLogStream"
+                                        })
+                                    }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that the state machine has permission to invoke the Lambda function.
+        /// The state machine execution role should include lambda:InvokeFunction permission.
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveLambdaInvokePermission()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have IAM policy allowing Lambda invocation
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", "lambda:InvokeFunction" }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
     }
 }

@@ -25,13 +25,50 @@ logger.setLevel(logging.INFO)
 METADATA_TABLE_NAME = os.environ.get('METADATA_TABLE_NAME', '')
 OUTPUT_BUCKET_NAME = os.environ.get('OUTPUT_BUCKET_NAME', '')
 
+# Supported file extensions for audio processing
+SUPPORTED_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.txt', '.json'}
+
+
+def validate_file_extension(object_key: str) -> None:
+    """
+    Validate that the file has a supported extension.
+    
+    Args:
+        object_key: S3 object key to validate
+        
+    Raises:
+        ValueError: If file extension is not supported
+    """
+    # Extract file extension (convert to lowercase for case-insensitive matching)
+    extension = os.path.splitext(object_key.lower())[1]
+    
+    if not extension:
+        raise ValueError(f"File has no extension: {object_key}")
+    
+    if extension not in SUPPORTED_EXTENSIONS:
+        supported = ', '.join(sorted(SUPPORTED_EXTENSIONS))
+        raise ValueError(
+            f"Unsupported file extension '{extension}'. "
+            f"Supported extensions are: {supported}"
+        )
+    
+    logger.info(f"File extension '{extension}' is valid")
+
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Lambda handler for audio processing pipeline.
     
     This function receives S3 event details from the Step Functions state machine,
-    logs the input, performs basic validation, and returns enriched metadata.
+    logs the input, performs input validation (bucket, key, file extension), 
+    and returns enriched metadata.
+    
+    Input validation ensures:
+    - Bucket name and object key are present
+    - File extension is one of: .mp3, .wav, .m4a, .txt, .json
+    
+    If validation fails, the function raises an exception which will be caught
+    by the Step Functions state machine and routed to the error handling path.
     
     Args:
         event: Input event from Step Functions containing S3 event details
@@ -39,6 +76,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         
     Returns:
         Dictionary with processing status and metadata
+        
+    Raises:
+        ValueError: If input validation fails (missing fields or unsupported file type)
     """
     try:
         # Log the incoming event for debugging
@@ -56,11 +96,14 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         logger.info(f"Processing audio: {audio_id}")
         logger.info(f"Bucket: {bucket_name}, Key: {object_key}")
         
-        # Basic validation
+        # Input validation: Check required fields
         if not bucket_name or not object_key:
             raise ValueError("Missing required S3 event details: bucket name or object key")
         
-        # Placeholder for future processing logic:
+        # Input validation: Check file extension (Issue #8)
+        validate_file_extension(object_key)
+        
+        # Placeholder for future advanced processing logic:
         # - Validate file format (MP3, WAV, M4A, or TXT)
         # - Extract metadata (file size, duration, MIME type)
         # - Update DynamoDB status
@@ -79,9 +122,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Error processing audio: {str(e)}", exc_info=True)
-        return {
-            'statusCode': 500,
-            'status': 'error',
-            'error': str(e),
-            'message': 'Audio processor failed'
-        }
+        # Re-raise the exception so Step Functions can catch it and route to error handling
+        # This ensures the state machine Catch block is triggered and the pipeline
+        # transitions to the failure path (UpdateStatusToFailed → PublishFailureNotification)
+        raise

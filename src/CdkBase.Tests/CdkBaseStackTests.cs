@@ -898,5 +898,144 @@ namespace CdkBase.Tests
                 }
             }));
         }
+
+        /// <summary>
+        /// Test that the Lambda invocation task has error handling (Catch block).
+        /// This ensures that Lambda errors are caught and routed to the failure path.
+        /// Issue #8: Complete pipeline wiring with input validation.
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveErrorHandlingInStateMachine()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine definition should contain Lambda task with Catch block
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            // Check that the Lambda invocation task (ProcessAudioWithLambda) has error handling
+            var hasLambdaCatch = false;
+            foreach (var sm in stateMachines)
+            {
+                if (sm.Value.ContainsKey("Properties"))
+                {
+                    var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                    if (properties?.ContainsKey("DefinitionString") == true)
+                    {
+                        var definition = properties["DefinitionString"]?.ToString() ?? "";
+                        // The definition should have multiple Catch blocks (Lambda + Polly)
+                        // and should reference ProcessAudioWithLambda task
+                        if (definition.Contains("ProcessAudioWithLambda") && 
+                            definition.Contains("Catch"))
+                        {
+                            hasLambdaCatch = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Assert.True(hasLambdaCatch, "Lambda invocation task should have error handling (Catch block) in state machine definition");
+        }
+
+        /// <summary>
+        /// Test that the complete end-to-end pipeline is wired correctly.
+        /// This verifies the entire flow: EventBridge -> Step Functions -> Lambda -> Polly -> DynamoDB -> SNS.
+        /// Issue #8: Verify complete pipeline wiring.
+        /// </summary>
+        [Fact]
+        public void Pipeline_ShouldBeCompletelyWired()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            var json = template.ToJSON();
+            
+            // ASSERT - Verify all key components exist and are connected
+            // 1. S3 buckets (Input and Output)
+            Assert.Contains("AWS::S3::Bucket", json);
+            
+            // 2. EventBridge rule targeting Step Functions
+            Assert.Contains("AWS::Events::Rule", json);
+            
+            // 3. Step Functions state machine
+            Assert.Contains("AWS::StepFunctions::StateMachine", json);
+            
+            // 4. Lambda function
+            Assert.Contains("AWS::Lambda::Function", json);
+            
+            // 5. DynamoDB table
+            Assert.Contains("AWS::DynamoDB::Table", json);
+            
+            // 6. SNS topics (2 topics for success and failure)
+            template.ResourceCountIs("AWS::SNS::Topic", 2);
+            
+            // 7. Verify state machine definition contains all expected tasks
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            var definition = "";
+            foreach (var sm in stateMachines)
+            {
+                var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                definition = properties?["DefinitionString"]?.ToString() ?? "";
+            }
+            
+            // Verify key states are present in the definition
+            Assert.Contains("WriteInitialMetadata", definition);
+            Assert.Contains("ProcessAudioWithLambda", definition);
+            Assert.Contains("PollyTextToSpeech", definition);
+            Assert.Contains("UpdateStatusToCompleted", definition);
+            Assert.Contains("UpdateStatusToFailed", definition);
+            Assert.Contains("PublishSuccessNotification", definition);
+            Assert.Contains("PublishFailureNotification", definition);
+        }
+
+        /// <summary>
+        /// Test that the Lambda function output is properly passed through the state machine.
+        /// This ensures ResultPath is configured correctly for Lambda invocation.
+        /// Issue #8: Verify input/output handling in complete pipeline.
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveProperResultPathConfiguration()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine definition should configure ResultPath for Lambda
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            var hasResultPath = false;
+            foreach (var sm in stateMachines)
+            {
+                if (sm.Value.ContainsKey("Properties"))
+                {
+                    var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                    if (properties?.ContainsKey("DefinitionString") == true)
+                    {
+                        var definition = properties["DefinitionString"]?.ToString() ?? "";
+                        // ResultPath should be configured for Lambda task to preserve original input
+                        if (definition.Contains("processorResult") || definition.Contains("ResultPath"))
+                        {
+                            hasResultPath = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Assert.True(hasResultPath, "Lambda invocation should have ResultPath configured to preserve state");
+        }
     }
 }

@@ -304,6 +304,13 @@ namespace CdkBase
                 ResultPath = "$.error"
             });
 
+            // Add error handling to Lambda task with Catch block (Issue #8)
+            processAudio.AddCatch(updateStatusToFailed.Next(publishFailureNotification), new CatchProps
+            {
+                Errors = new[] { "States.ALL" },
+                ResultPath = "$.error"
+            });
+
             // Define state machine definition with error handling
             // Chain: Write initial metadata → Lambda processor → Polly TTS (with error handling) → Update status to completed → Publish success notification
             var definition = writeToDynamoDB
@@ -426,14 +433,14 @@ namespace CdkBase
             {
                 Value = PipelineFailedTopic.TopicArn,
                 Description = "ARN of the pipeline failed SNS topic",
+                ExportName = $"{id}-PipelineFailedTopicArn"
+            });
 
             new CfnOutput(this, "AudioProcessorFunctionArn", new CfnOutputProps
             {
                 Value = AudioProcessorFunction.FunctionArn,
                 Description = "ARN of the audio processor Lambda function",
                 ExportName = $"{id}-AudioProcessorFunctionArn"
-            });
-                ExportName = $"{id}-PipelineFailedTopicArn"
             });
         }
     }

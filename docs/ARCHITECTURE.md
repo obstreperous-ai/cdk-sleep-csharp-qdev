@@ -17,7 +17,7 @@ This project implements a production-grade, event-driven sleep audio processing 
 ## System Architecture Diagram
 ## Current Implementation Status
 
-### ✅ Completed (Issues #3, #4, #5, #6, and #7)
+### ✅ Completed (Issues #3, #4, #5, #6, #7, and #8)
 - **Output S3 Bucket**: Private bucket with KMS encryption and versioning for processed audio files
 - **KMS Key**: Customer-managed key for S3 bucket encryption with automatic key rotation
 - **EventBridge Rule**: Triggers on `Object Created` events from the Input bucket, targets Step Functions state machine
@@ -26,11 +26,13 @@ This project implements a production-grade, event-driven sleep audio processing 
 - **DynamoDB Metadata Table**: Stores audio pipeline metadata with on-demand billing and point-in-time recovery
 - **State Machine I/O Handling**: Integrated DynamoDB tasks for writing/updating processing status
 - **SNS Notifications**: Two encrypted SNS topics for pipeline completion and failure notifications
-- **Error Handling**: Step Functions Catch blocks for graceful error handling with status updates
+- **Error Handling**: Step Functions Catch blocks on Lambda and Polly tasks for graceful error handling
+- **Lambda Audio Processor**: Lambda function with input validation (file extensions: .mp3, .wav, .m4a, .txt, .json)
+- **Complete Pipeline Wiring**: Full end-to-end integration from S3 upload through to SNS notifications
+- **Input Validation**: Lambda validates file extensions; invalid files trigger the failure error path
 
-- **Lambda Audio Processor**: Basic Lambda function skeleton for audio processing, metadata enrichment, and validation
-### 🚧 Upcoming (Issue #8 and Beyond)
-- Complete pipeline wiring, input validation, and end-to-end flow
+### 🚧 Upcoming (Issue #9 and Beyond)
+- Pipeline testing, refinement, and deployment preparation
 - CloudWatch alarms and dashboards
 
 These foundational components enable the event-driven architecture while following strict TDD principles with comprehensive test coverage.

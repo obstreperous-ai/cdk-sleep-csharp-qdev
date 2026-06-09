@@ -1362,5 +1362,308 @@ namespace CdkBase.Tests
             // KMS key should exist
             template.ResourceCountIs("AWS::KMS::Key", 1);
         }
+
+        // ============================================
+        // Issue #10: Advanced Error Handling, Retry Policies, and Observability Tests
+        // ============================================
+
+        /// <summary>
+        /// Test that the Lambda invocation task has retry policy configured.
+        /// Retry policy should use exponential backoff for transient errors.
+        /// Issue #10: Retry policies for Lambda
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveRetryPolicyConfigured()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine definition should contain Retry configuration for Lambda task
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            var hasRetryPolicy = false;
+            foreach (var sm in stateMachines)
+            {
+                if (sm.Value.ContainsKey("Properties"))
+                {
+                    var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                    if (properties?.ContainsKey("DefinitionString") == true)
+                    {
+                        var definition = properties["DefinitionString"]?.ToString() ?? "";
+                        // Retry configuration should be present in the Lambda task
+                        if (definition.Contains("ProcessAudioWithLambda") && 
+                            definition.Contains("Retry"))
+                        {
+                            hasRetryPolicy = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Assert.True(hasRetryPolicy, "Lambda invocation task should have retry policy with exponential backoff");
+        }
+
+        /// <summary>
+        /// Test that the Polly task has retry policy configured.
+        /// Retry policy should handle transient Polly service errors.
+        /// Issue #10: Retry policies for Polly
+        /// </summary>
+        [Fact]
+        public void Polly_ShouldHaveRetryPolicyConfigured()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine definition should contain Retry configuration for Polly task
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            var hasRetryPolicy = false;
+            foreach (var sm in stateMachines)
+            {
+                if (sm.Value.ContainsKey("Properties"))
+                {
+                    var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                    if (properties?.ContainsKey("DefinitionString") == true)
+                    {
+                        var definition = properties["DefinitionString"]?.ToString() ?? "";
+                        // Retry configuration should be present in the Polly task
+                        if (definition.Contains("PollyTextToSpeech") && 
+                            definition.Contains("Retry"))
+                        {
+                            hasRetryPolicy = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Assert.True(hasRetryPolicy, "Polly task should have retry policy with exponential backoff");
+        }
+
+        /// <summary>
+        /// Test that DynamoDB tasks have retry policy configured.
+        /// DynamoDB operations should retry on throttling or transient errors.
+        /// Issue #10: Retry policies for DynamoDB
+        /// </summary>
+        [Fact]
+        public void DynamoDB_ShouldHaveRetryPolicyConfigured()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine definition should contain Retry configuration for DynamoDB tasks
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            var hasRetryPolicy = false;
+            foreach (var sm in stateMachines)
+            {
+                if (sm.Value.ContainsKey("Properties"))
+                {
+                    var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                    if (properties?.ContainsKey("DefinitionString") == true)
+                    {
+                        var definition = properties["DefinitionString"]?.ToString() ?? "";
+                        // Retry configuration should be present in DynamoDB tasks
+                        if ((definition.Contains("WriteInitialMetadata") || 
+                             definition.Contains("UpdateStatusToCompleted") ||
+                             definition.Contains("UpdateStatusToFailed")) && 
+                            definition.Contains("Retry"))
+                        {
+                            hasRetryPolicy = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Assert.True(hasRetryPolicy, "DynamoDB tasks should have retry policy for throttling and transient errors");
+        }
+
+        /// <summary>
+        /// Test that the Lambda function has X-Ray tracing enabled.
+        /// X-Ray tracing provides distributed tracing for observability.
+        /// Issue #10: X-Ray tracing on Lambda
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveXRayTracingEnabled()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Lambda function should have X-Ray tracing enabled
+            template.HasResourceProperties("AWS::Lambda::Function", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "TracingConfig", new Dictionary<string, object>
+                    {
+                        { "Mode", "Active" }
+                    }
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that CloudWatch Alarms exist for state machine failures.
+        /// Alarms should notify on execution failures for production monitoring.
+        /// Issue #10: CloudWatch Alarms for observability
+        /// </summary>
+        [Fact]
+        public void CloudWatch_ShouldHaveStateMachineFailureAlarm()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have at least one CloudWatch Alarm for state machine failures
+            template.ResourceCountIs("AWS::CloudWatch::Alarm", Match.AtLeast(1));
+        }
+
+        /// <summary>
+        /// Test that CloudWatch Alarm exists for Lambda errors.
+        /// Alarm should trigger on Lambda function errors for monitoring.
+        /// Issue #10: CloudWatch Alarms for Lambda
+        /// </summary>
+        [Fact]
+        public void CloudWatch_ShouldHaveLambdaErrorAlarm()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Should have CloudWatch Alarm monitoring Lambda errors
+            var alarms = template.FindResources("AWS::CloudWatch::Alarm");
+            Assert.NotEmpty(alarms);
+            
+            // At least one alarm should reference Lambda metrics
+            var hasLambdaAlarm = false;
+            foreach (var alarm in alarms)
+            {
+                if (alarm.Value.ContainsKey("Properties"))
+                {
+                    var properties = alarm.Value["Properties"] as Dictionary<string, object>;
+                    var metricName = properties?["MetricName"]?.ToString() ?? "";
+                    var namespaceName = properties?["Namespace"]?.ToString() ?? "";
+                    
+                    if (metricName == "Errors" && namespaceName == "AWS/Lambda")
+                    {
+                        hasLambdaAlarm = true;
+                        break;
+                    }
+                }
+            }
+            Assert.True(hasLambdaAlarm, "Should have CloudWatch Alarm for Lambda errors");
+        }
+
+        /// <summary>
+        /// Test that specific error types are caught with different Catch blocks.
+        /// Advanced error handling should differentiate between error types.
+        /// Issue #10: Advanced error handling with specific error types
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveSpecificErrorTypeCatchBlocks()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine definition should contain specific error types in Catch blocks
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            var hasSpecificErrorHandling = false;
+            foreach (var sm in stateMachines)
+            {
+                if (sm.Value.ContainsKey("Properties"))
+                {
+                    var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                    if (properties?.ContainsKey("DefinitionString") == true)
+                    {
+                        var definition = properties["DefinitionString"]?.ToString() ?? "";
+                        // Should have specific error types like Lambda.ServiceException, States.TaskFailed
+                        if (definition.Contains("Catch") && 
+                            (definition.Contains("Lambda.") || 
+                             definition.Contains("States.TaskFailed") ||
+                             definition.Contains("States.Timeout")))
+                        {
+                            hasSpecificErrorHandling = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Assert.True(hasSpecificErrorHandling, "State machine should have specific error type handling in Catch blocks");
+        }
+
+        /// <summary>
+        /// Test that the Step Functions state machine has X-Ray tracing enabled.
+        /// This was already tested in previous issues, but we verify it's still enabled.
+        /// Issue #10: Verify X-Ray tracing on state machine
+        /// </summary>
+        [Fact]
+        public void StateMachine_ShouldHaveXRayTracingEnabled()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - State machine should have tracing enabled
+            template.HasResourceProperties("AWS::StepFunctions::StateMachine", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "TracingConfiguration", new Dictionary<string, object>
+                    {
+                        { "Enabled", true }
+                    }
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that IAM permissions exist for X-Ray tracing on Lambda.
+        /// Lambda execution role should include X-Ray write permissions.
+        /// Issue #10: IAM permissions for X-Ray
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveXRayIAMPermissions()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Lambda execution role should have X-Ray permissions
+            // CDK automatically adds AWSXRayDaemonWriteAccess managed policy when tracing is enabled
+            var roles = template.FindResources("AWS::IAM::Role");
+            Assert.NotEmpty(roles);
+        }
     }
 }

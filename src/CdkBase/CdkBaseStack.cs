@@ -11,6 +11,7 @@ using Amazon.CDK.AWS.StepFunctions.Tasks;
 using Amazon.CDK.AWS.SNS;
 using Amazon.CDK.AWS.IAM;
 using System.Collections.Generic;
+using Amazon.CDK.AWS.CloudWatch;
 using Constructs;
 
 namespace CdkBase
@@ -84,6 +85,7 @@ namespace CdkBase
         /// Initialize all stack resources with environment-specific configurations.
         /// </summary>
         private void InitializeStack()
+        {
             // Create KMS key for S3 bucket encryption
             EncryptionKey = new Key(this, "SleepAudioS3EncryptionKey", new KeyProps
             {
@@ -172,7 +174,8 @@ namespace CdkBase
                     { "METADATA_TABLE_NAME", MetadataTable.TableName },
                     { "OUTPUT_BUCKET_NAME", OutputBucket.BucketName }
                 },
-                LogRetention = RetentionDays.TWO_WEEKS
+                LogRetention = RetentionDays.TWO_WEEKS,
+                Tracing = Tracing.ACTIVE
             });
 
             // Grant Lambda permissions to access DynamoDB table
@@ -198,7 +201,17 @@ namespace CdkBase
                     { "createdAt", DynamoAttributeValue.FromString(JsonPath.StringAt("$$.State.EnteredTime")) },
                     { "updatedAt", DynamoAttributeValue.FromString(JsonPath.StringAt("$$.State.EnteredTime")) }
                 },
-                ResultPath = "$.dynamoResult"
+                ResultPath = "$.dynamoResult",
+                RetryOnServiceExceptions = true
+            });
+
+            // Add explicit retry configuration for DynamoDB write task (Issue #10)
+            writeToDynamoDB.AddRetry(new RetryProps
+            {
+                Errors = new[] { "States.TaskFailed", "DynamoDB.ProvisionedThroughputExceededException" },
+                Interval = Duration.Seconds(1),
+                MaxAttempts = 3,
+                BackoffRate = 2.0
             });
 
             // Define Lambda invocation task to process audio
@@ -210,7 +223,23 @@ namespace CdkBase
                 {
                     { "detail", JsonPath.ObjectAt("$.detail") }
                 }),
-                ResultPath = "$.processorResult"
+                ResultPath = "$.processorResult",
+                RetryOnServiceExceptions = true
+            });
+
+            // Add explicit retry configuration for Lambda invocation (Issue #10)
+            processAudio.AddRetry(new RetryProps
+            {
+                Errors = new[] { 
+                    "Lambda.ServiceException", 
+                    "Lambda.AWSLambdaException", 
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException",
+                    "States.TaskFailed" 
+                },
+                Interval = Duration.Seconds(2),
+                MaxAttempts = 2,
+                BackoffRate = 2.0
             });
 
             // Define DynamoDB UpdateItem task to mark processing as complete
@@ -234,7 +263,17 @@ namespace CdkBase
                     { ":completed", DynamoAttributeValue.FromString("COMPLETED") },
                     { ":timestamp", DynamoAttributeValue.FromString(JsonPath.StringAt("$$.State.EnteredTime")) }
                 },
-                ResultPath = "$.updateResult"
+                ResultPath = "$.updateResult",
+                RetryOnServiceExceptions = true
+            });
+
+            // Add retry configuration for DynamoDB update on success (Issue #10)
+            updateStatusToCompleted.AddRetry(new RetryProps
+            {
+                Errors = new[] { "States.TaskFailed", "DynamoDB.ProvisionedThroughputExceededException" },
+                Interval = Duration.Seconds(1),
+                MaxAttempts = 3,
+                BackoffRate = 2.0
             });
 
             // Define DynamoDB UpdateItem task to mark processing as failed
@@ -260,7 +299,17 @@ namespace CdkBase
                     { ":timestamp", DynamoAttributeValue.FromString(JsonPath.StringAt("$$.State.EnteredTime")) },
                     { ":error", DynamoAttributeValue.FromString(JsonPath.StringAt("$.Error")) }
                 },
-                ResultPath = "$.updateResult"
+                ResultPath = "$.updateResult",
+                RetryOnServiceExceptions = true
+            });
+
+            // Add retry configuration for DynamoDB update on failure (Issue #10)
+            updateStatusToFailed.AddRetry(new RetryProps
+            {
+                Errors = new[] { "States.TaskFailed", "DynamoDB.ProvisionedThroughputExceededException" },
+                Interval = Duration.Seconds(1),
+                MaxAttempts = 3,
+                BackoffRate = 2.0
             });
 
             // Define SNS Publish task for success notification
@@ -317,17 +366,48 @@ namespace CdkBase
                 ResultPath = "$.pollyResult"
             });
 
-            // Add error handling to Polly task with Catch block
+            // Add explicit retry configuration for Polly task (Issue #10)
+            pollyTask.AddRetry(new RetryProps
+            {
+                Errors = new[] { 
+                    "Polly.ServiceFailureException",
+                    "States.TaskFailed",
+                    "States.Timeout"
+                },
+                Interval = Duration.Seconds(2),
+                MaxAttempts = 2,
+                BackoffRate = 2.0
+            });
+
+            // Add advanced error handling to Polly task with specific error types (Issue #10)
             pollyTask.AddCatch(updateStatusToFailed.Next(publishFailureNotification), new CatchProps
             {
-                Errors = new[] { "States.ALL" },
+                Errors = new[] { 
+                    "Polly.ServiceFailureException",
+                    "Polly.TextLengthExceededException",
+                    "Polly.InvalidSsmlException",
+                    "States.TaskFailed",
+                    "States.Timeout",
+                    "States.Permissions",
+                    "States.ALL"
+                },
                 ResultPath = "$.error"
             });
 
-            // Add error handling to Lambda task with Catch block (Issue #8)
+            // Add advanced error handling to Lambda task with specific error types (Issue #10)
             processAudio.AddCatch(updateStatusToFailed.Next(publishFailureNotification), new CatchProps
             {
-                Errors = new[] { "States.ALL" },
+                Errors = new[] { 
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException",
+                    "Lambda.Unknown",
+                    "States.TaskFailed",
+                    "States.Timeout",
+                    "States.Permissions",
+                    "States.ALL"
+                },
                 ResultPath = "$.error"
             });
 
@@ -369,6 +449,60 @@ namespace CdkBase
 
             PipelineFailedTopic.GrantPublish(AudioPipelineStateMachine);
 
+
+            // Create CloudWatch Alarms for observability (Issue #10)
+            // Alarm for State Machine Execution Failures
+            var stateMachineFailureAlarm = new Alarm(this, "StateMachineExecutionFailureAlarm", new AlarmProps
+            {
+                Metric = AudioPipelineStateMachine.MetricFailed(new MetricOptions
+                {
+                    Period = Duration.Minutes(5),
+                    Statistic = "Sum"
+                }),
+                Threshold = 1,
+                EvaluationPeriods = 1,
+                ComparisonOperator = ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                AlarmDescription = "Alarm when state machine execution fails",
+                AlarmName = "SleepAudioPipeline-StateMachineFailures",
+                TreatMissingData = TreatMissingData.NOT_BREACHING
+            });
+
+            // Alarm for Lambda Function Errors
+            var lambdaErrorAlarm = new Alarm(this, "LambdaErrorAlarm", new AlarmProps
+            {
+                Metric = AudioProcessorFunction.MetricErrors(new MetricOptions
+                {
+                    Period = Duration.Minutes(5),
+                    Statistic = "Sum"
+                }),
+                Threshold = 2,
+                EvaluationPeriods = 1,
+                ComparisonOperator = ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                AlarmDescription = "Alarm when Lambda function has errors",
+                AlarmName = "SleepAudioPipeline-LambdaErrors",
+                TreatMissingData = TreatMissingData.NOT_BREACHING
+            });
+
+            // Alarm for State Machine Throttled Executions
+            var stateMachineThrottledAlarm = new Alarm(this, "StateMachineThrottledAlarm", new AlarmProps
+            {
+                Metric = AudioPipelineStateMachine.MetricThrottled(new MetricOptions
+                {
+                    Period = Duration.Minutes(5),
+                    Statistic = "Sum"
+                }),
+                Threshold = 1,
+                EvaluationPeriods = 1,
+                ComparisonOperator = ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                AlarmDescription = "Alarm when state machine executions are throttled",
+                AlarmName = "SleepAudioPipeline-StateMachineThrottled",
+                TreatMissingData = TreatMissingData.NOT_BREACHING
+            });
+
+            // Optionally publish alarms to SNS topic for notifications
+            // Future enhancement: Configure alarm actions to send notifications via SNS
+            // stateMachineFailureAlarm.AddAlarmAction(new SnsAction(PipelineFailedTopic));
+            // lambdaErrorAlarm.AddAlarmAction(new SnsAction(PipelineFailedTopic));
             // Create placeholder CloudWatch Log Group for additional event logging
             var eventLogGroup = new LogGroup(this, "SleepAudioEventLogGroup", new LogGroupProps
             {

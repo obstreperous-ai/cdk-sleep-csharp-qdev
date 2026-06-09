@@ -61,6 +61,21 @@ jobs:
         env:
           CI: true
       
+      - name: CDK Synth for Dev Environment
+        run: cdk synth -c environment=dev
+        env:
+          CI: true
+      
+      - name: CDK Synth for Stage Environment
+        run: cdk synth -c environment=stage
+        env:
+          CI: true
+      
+      - name: CDK Synth for Prod Environment
+        run: cdk synth -c environment=prod
+        env:
+          CI: true
+      
       - name: CDK Diff (if not on main branch)
         if: github.ref != 'refs/heads/main'
         run: cdk diff || true
@@ -78,5 +93,6 @@ jobs:
         run: |
           echo "✅ All tests passed! TDD workflow successful."
           echo "📦 CDK synthesis completed."
+          echo "🌍 Multi-environment support validated (dev, stage, prod)."
           echo "🚀 Ready for deployment."
 

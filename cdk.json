@@ -99,6 +99,36 @@
     "@aws-cdk/aws-route53-patterns:useDistribution": true,
     "@aws-cdk/aws-cloudfront:defaultFunctionRuntimeV2_0": true,
     "@aws-cdk/aws-elasticloadbalancingv2:usePostQuantumTlsPolicy": true,
-    "@aws-cdk/aws-batch:defaultToAL2023": true
+    "@aws-cdk/aws-batch:defaultToAL2023": true,
+    "environments": {
+      "dev": {
+        "account": "111111111111",
+        "region": "us-east-1",
+        "description": "Development environment for testing and iteration",
+        "logRetentionDays": 7,
+        "enableDetailedMonitoring": false,
+        "enableAlarms": false
+      },
+      "stage": {
+        "account": "222222222222",
+        "region": "us-east-1",
+        "description": "Staging environment for pre-production testing",
+        "logRetentionDays": 30,
+        "enableDetailedMonitoring": true,
+        "enableAlarms": false
+      },
+      "prod": {
+        "account": "333333333333",
+        "region": "us-east-1",
+        "description": "Production environment",
+        "logRetentionDays": 90,
+        "enableDetailedMonitoring": true,
+        "enableAlarms": true
+      }
+    },
+    "deploymentConfig": {
+      "pipelineEnabled": false,
+      "manualApprovalRequired": true
+    }
   }
 }

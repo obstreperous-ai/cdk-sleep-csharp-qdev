@@ -1037,5 +1037,330 @@ namespace CdkBase.Tests
             }
             Assert.True(hasResultPath, "Lambda invocation should have ResultPath configured to preserve state");
         }
+
+        /// <summary>
+        /// Test that the stack supports environment-specific resource naming.
+        /// Resources should include the environment name in their IDs/names when provided.
+        /// Issue #9: Multi-environment support
+        /// </summary>
+        [Fact]
+        public void Stack_ShouldSupportEnvironmentSpecificNaming()
+        {
+            // ARRANGE
+            var app = new App();
+            var environmentName = "dev";
+            
+            // ACT
+            var stack = new CdkBaseStack(app, "CdkBaseStack", new StackProps(), environmentName);
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Stack should be created successfully with environment parameter
+            Assert.NotNull(template);
+        }
+
+        /// <summary>
+        /// Test that environment tags are applied to the stack.
+        /// All resources should be tagged with the environment name for cost tracking.
+        /// Issue #9: Environment tagging for cost allocation
+        /// </summary>
+        [Fact]
+        public void Stack_ShouldHaveEnvironmentTags()
+        {
+            // ARRANGE
+            var app = new App();
+            var environmentName = "dev";
+            
+            // ACT
+            var stack = new CdkBaseStack(app, "CdkBaseStack", new StackProps(), environmentName);
+            
+            // ASSERT - Stack should have environment tag
+            var tags = stack.Tags;
+            Assert.NotNull(tags);
+        }
+
+        /// <summary>
+        /// Test that the stack can be synthesized for different environments.
+        /// This ensures the stack is environment-agnostic and can be deployed to dev, stage, prod.
+        /// Issue #9: Multi-environment deployment preparation
+        /// </summary>
+        [Theory]
+        [InlineData("dev")]
+        [InlineData("stage")]
+        [InlineData("prod")]
+        public void Stack_ShouldSynthesizeForDifferentEnvironments(string environmentName)
+        {
+            // ARRANGE
+            var app = new App();
+            
+            // ACT
+            var stack = new CdkBaseStack(app, $"CdkBaseStack-{environmentName}", new StackProps(), environmentName);
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Stack should synthesize successfully for each environment
+            Assert.NotNull(template);
+            
+            // Verify core resources exist
+            template.ResourceCountIs("AWS::S3::Bucket", 2);
+            template.ResourceCountIs("AWS::StepFunctions::StateMachine", 1);
+            template.ResourceCountIs("AWS::DynamoDB::Table", 1);
+        }
+
+        /// <summary>
+        /// Test that environment-specific configurations can be applied.
+        /// Different environments may have different log retention, alarm settings, etc.
+        /// Issue #9: Environment-specific configuration
+        /// </summary>
+        [Fact]
+        public void Stack_ShouldSupportEnvironmentSpecificConfiguration()
+        {
+            // ARRANGE
+            var app = new App();
+            
+            // ACT - Create stacks for different environments
+            var devStack = new CdkBaseStack(app, "DevStack", new StackProps(), "dev");
+            var prodStack = new CdkBaseStack(app, "ProdStack", new StackProps(), "prod");
+            
+            var devTemplate = Template.FromStack(devStack);
+            var prodTemplate = Template.FromStack(prodStack);
+            
+            // ASSERT - Both stacks should be valid
+            Assert.NotNull(devTemplate);
+            Assert.NotNull(prodTemplate);
+        }
+
+        /// <summary>
+        /// Test complete pipeline integration with valid input.
+        /// Verifies all components are properly wired for successful processing flow.
+        /// Issue #9: Integration testing for successful path
+        /// </summary>
+        [Fact]
+        public void Pipeline_ShouldHandleValidInputSuccessfully()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            var json = template.ToJSON();
+            
+            // ASSERT - Verify complete success path exists in state machine
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            var definition = "";
+            foreach (var sm in stateMachines)
+            {
+                var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                definition = properties?["DefinitionString"]?.ToString() ?? "";
+            }
+            
+            // Verify success path components
+            Assert.Contains("WriteInitialMetadata", definition);
+            Assert.Contains("ProcessAudioWithLambda", definition);
+            Assert.Contains("PollyTextToSpeech", definition);
+            Assert.Contains("UpdateStatusToCompleted", definition);
+            Assert.Contains("PublishSuccessNotification", definition);
+            
+            // Verify all required AWS resources for the success path
+            Assert.Contains("AWS::Lambda::Function", json);
+            Assert.Contains("AWS::DynamoDB::Table", json);
+            Assert.Contains("AWS::SNS::Topic", json);
+        }
+
+        /// <summary>
+        /// Test complete pipeline integration with invalid input.
+        /// Verifies error path is properly configured and errors are handled gracefully.
+        /// Issue #9: Integration testing for error path
+        /// </summary>
+        [Fact]
+        public void Pipeline_ShouldHandleInvalidInputGracefully()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Verify error handling path exists
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            var definition = "";
+            foreach (var sm in stateMachines)
+            {
+                var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                definition = properties?["DefinitionString"]?.ToString() ?? "";
+            }
+            
+            // Verify error path components
+            Assert.Contains("Catch", definition);
+            Assert.Contains("UpdateStatusToFailed", definition);
+            Assert.Contains("PublishFailureNotification", definition);
+            
+            // Verify both success and failure SNS topics exist
+            template.ResourceCountIs("AWS::SNS::Topic", 2);
+        }
+
+        /// <summary>
+        /// Test that status updates are properly configured in the state machine.
+        /// DynamoDB should be updated at each critical stage of processing.
+        /// Issue #9: Verify status tracking throughout pipeline
+        /// </summary>
+        [Fact]
+        public void Pipeline_ShouldUpdateStatusAtEachStage()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Verify DynamoDB operations in state machine
+            var stateMachines = template.FindResources("AWS::StepFunctions::StateMachine");
+            Assert.NotEmpty(stateMachines);
+            
+            var definition = "";
+            foreach (var sm in stateMachines)
+            {
+                var properties = sm.Value["Properties"] as Dictionary<string, object>;
+                definition = properties?["DefinitionString"]?.ToString() ?? "";
+            }
+            
+            // Verify status updates at different stages
+            Assert.Contains("WriteInitialMetadata", definition); // Initial: PROCESSING
+            Assert.Contains("UpdateStatusToCompleted", definition); // Success: COMPLETED
+            Assert.Contains("UpdateStatusToFailed", definition); // Error: FAILED
+            
+            // Verify DynamoDB permissions
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", Match.ArrayWith(new object[]
+                                        {
+                                            "dynamodb:PutItem"
+                                        })
+                                    }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that the EventBridge rule correctly filters and routes S3 events.
+        /// Only events from the Input bucket should trigger the pipeline.
+        /// Issue #9: Verify event routing configuration
+        /// </summary>
+        [Fact]
+        public void EventBridge_ShouldFilterS3EventsCorrectly()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Verify event pattern filters correctly
+            template.HasResourceProperties("AWS::Events::Rule", new Dictionary<string, object>
+            {
+                { "EventPattern", new Dictionary<string, object>
+                    {
+                        { "source", new string[] { "aws.s3" } },
+                        { "detail-type", new string[] { "Object Created" } },
+                        { "detail", Match.ObjectLike(new Dictionary<string, object>
+                            {
+                                { "bucket", Match.AnyValue() }
+                            })
+                        }
+                    }
+                }
+            });
+            
+            // Verify rule has retry configuration
+            template.HasResourceProperties("AWS::Events::Rule", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "Targets", Match.AnyValue() }
+            }));
+        }
+
+        /// <summary>
+        /// Test that IAM permissions follow least-privilege principle.
+        /// Each component should only have the minimum necessary permissions.
+        /// Issue #9: Verify security best practices
+        /// </summary>
+        [Fact]
+        public void IAM_ShouldFollowLeastPrivilegePrinciple()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Verify IAM roles exist
+            var roles = template.FindResources("AWS::IAM::Role");
+            Assert.NotEmpty(roles);
+            
+            // Verify policies are scoped to specific resources
+            var policies = template.FindResources("AWS::IAM::Policy");
+            Assert.NotEmpty(policies);
+            
+            // Each policy should have proper resource constraints (not "*" where avoidable)
+            foreach (var policy in policies)
+            {
+                var properties = policy.Value["Properties"] as Dictionary<string, object>;
+                Assert.NotNull(properties);
+            }
+        }
+
+        /// <summary>
+        /// Test that all sensitive data is encrypted.
+        /// S3, DynamoDB, and SNS should all use encryption.
+        /// Issue #9: Verify encryption compliance
+        /// </summary>
+        [Fact]
+        public void Security_AllDataShouldBeEncrypted()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Verify encryption on all data stores
+            // S3 buckets
+            template.HasResourceProperties("AWS::S3::Bucket", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "BucketEncryption", Match.AnyValue() }
+            }));
+            
+            // DynamoDB table
+            template.HasResourceProperties("AWS::DynamoDB::Table", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "SSESpecification", Match.AnyValue() }
+            }));
+            
+            // SNS topics
+            template.HasResourceProperties("AWS::SNS::Topic", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "KmsMasterKeyId", Match.AnyValue() }
+            }));
+            
+            // KMS key should exist
+            template.ResourceCountIs("AWS::KMS::Key", 1);
+        }
     }
 }

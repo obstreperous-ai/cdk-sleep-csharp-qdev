@@ -63,7 +63,27 @@ namespace CdkBase
         public IFunction AudioProcessorFunction { get; }
 
         internal CdkBaseStack(Construct scope, string id, IStackProps props = null) : base(scope, id, props)
+        /// <summary>
+        /// Environment name for this stack (dev, stage, prod, or null for default).
+        /// </summary>
+        public string Environment { get; }
+
+        internal CdkBaseStack(Construct scope, string id, IStackProps props = null, string environment = null) : base(scope, id, props)
         {
+            Environment = environment ?? "default";
+            
+            // Apply environment tags for cost allocation and resource organization
+            Tags.SetTag("Environment", Environment);
+            Tags.SetTag("Project", "SleepAudioPipeline");
+            Tags.SetTag("ManagedBy", "CDK");
+            
+            InitializeStack();
+        }
+
+        /// <summary>
+        /// Initialize all stack resources with environment-specific configurations.
+        /// </summary>
+        private void InitializeStack()
             // Create KMS key for S3 bucket encryption
             EncryptionKey = new Key(this, "SleepAudioS3EncryptionKey", new KeyProps
             {

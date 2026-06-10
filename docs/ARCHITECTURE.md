@@ -18,7 +18,7 @@ This project implements a production-grade, event-driven sleep audio processing 
 ## Current Implementation Status
 
 ### ✅ Completed (Issues #3, #4, #5, #6, #7, #8, and #9)
-- **Output S3 Bucket**: Private bucket with KMS encryption and versioning for processed audio files
+### ✅ Completed (Issues #3, #4, #5, #6, #7, #8, #9, and #10)
 - **KMS Key**: Customer-managed key for S3 bucket encryption with automatic key rotation
 - **EventBridge Rule**: Triggers on `Object Created` events from the Input bucket, targets Step Functions state machine
 - **Step Functions State Machine**: Orchestrates audio processing pipeline with CloudWatch logging enabled
@@ -34,9 +34,12 @@ This project implements a production-grade, event-driven sleep audio processing 
 - **Deployment Preparation**: CDK Pipelines skeleton and environment tagging for future CI/CD automation
 - **Expanded Testing**: Comprehensive integration tests for pipeline flow, error handling, and security
 
+- **Advanced Error Handling**: Specific Catch blocks for Lambda, Polly, and DynamoDB errors with targeted error routing
+- **Retry Policies**: Exponential backoff retry policies on all critical tasks (Lambda, Polly, DynamoDB)
+- **Enhanced Observability**: X-Ray tracing on Lambda and State Machine, structured JSON logging, CloudWatch Alarms
 ### 🚧 Upcoming (Issue #10 and Beyond)
-- Advanced error handling, retries, and observability (alarms, dashboards, X-Ray tracing)
-
+### 🚧 Upcoming (Issue #11 and Beyond)
+- Full audio processing implementation and output handling
 These foundational components enable the event-driven architecture while following strict TDD principles with comprehensive test coverage.
 
 ---
@@ -303,6 +306,129 @@ The state machine now includes comprehensive error handling and notifications:
 ```
 
 
+### Advanced Error Handling & Retry Strategies (Issue #10)
+
+The pipeline now includes production-grade error handling with specific error type catching and exponential backoff retry policies.
+
+**Retry Policies by Task**:
+
+1. **Lambda Invocation** (`ProcessAudioWithLambda`):
+   - **MaxAttempts**: 2
+   - **Interval**: 2 seconds
+   - **BackoffRate**: 2.0 (exponential)
+   - **Error Types**: Lambda.ServiceException, Lambda.AWSLambdaException, Lambda.SdkClientException, Lambda.TooManyRequestsException, States.TaskFailed
+
+2. **Polly Task** (`PollyTextToSpeech`):
+   - **MaxAttempts**: 2
+   - **Interval**: 2 seconds
+   - **BackoffRate**: 2.0 (exponential)
+   - **Error Types**: Polly.ServiceFailureException, States.TaskFailed, States.Timeout
+
+3. **DynamoDB Tasks** (All PutItem/UpdateItem):
+   - **MaxAttempts**: 3
+   - **Interval**: 1 second
+   - **BackoffRate**: 2.0 (exponential)
+   - **Error Types**: States.TaskFailed, DynamoDB.ProvisionedThroughputExceededException
+
+**Catch Block Error Types**:
+
+Lambda Task catches:
+- Lambda.ServiceException
+- Lambda.AWSLambdaException
+- Lambda.SdkClientException
+- Lambda.TooManyRequestsException
+- Lambda.Unknown
+- States.TaskFailed
+- States.Timeout
+- States.Permissions
+- States.ALL (catch-all)
+
+Polly Task catches:
+- Polly.ServiceFailureException
+- Polly.TextLengthExceededException
+- Polly.InvalidSsmlException
+- States.TaskFailed
+- States.Timeout
+- States.Permissions
+- States.ALL (catch-all)
+
+**Error Flow Diagram**:
+
+```
+Task Execution
+     │
+     ├──[Success]───► Continue Pipeline
+     │
+     └──[Error]
+          │
+          ├──[Retryable Error]───► Wait (Exponential Backoff) ──► Retry
+          │                                    │
+          │                                    └──[Max Retries Exceeded]
+          │                                              │
+          └──[Non-Retryable Error]──────────────────────┤
+                                                         │
+                                                         ▼
+                                            ┌─────────────────────────┐
+                                            │ Update Status to FAILED │
+                                            │ (DynamoDB UpdateItem)    │
+                                            └──────────┬──────────────┘
+                                                       │
+                                                       ▼
+                                            ┌─────────────────────────┐
+                                            │ Publish Failure         │
+                                            │ Notification (SNS)      │
+                                            └──────────┬──────────────┘
+                                                       │
+                                                       ▼
+                                                  [End: Failed]
+```
+
+### Observability Architecture (Issue #10)
+
+**X-Ray Distributed Tracing**:
+- **State Machine**: X-Ray tracing enabled (`TracingEnabled = true`)
+- **Lambda Function**: Active tracing mode (`Tracing.ACTIVE`)
+- **Benefits**: End-to-end request tracking, latency analysis, service map visualization
+
+**Structured JSON Logging**:
+
+Lambda function now outputs structured JSON logs for CloudWatch Logs Insights:
+
+```json
+{
+  "timestamp": "2024-01-15T10:30:00.123Z",
+  "level": "INFO",
+  "message": "Processing audio file",
+  "audioId": "s3-bucket-key.mp3",
+  "bucket": "input-bucket",
+  "key": "path/to/file.mp3",
+  "requestId": "abc-123-def-456"
+}
+```
+
+**CloudWatch Alarms**:
+
+Three critical alarms are configured for production monitoring:
+
+1. **StateMachine Execution Failures**:
+   - **Metric**: `ExecutionsFailed` (AWS/States)
+   - **Threshold**: ≥ 1 failure in 5 minutes
+   - **Action**: Trigger alarm state
+
+2. **Lambda Function Errors**:
+   - **Metric**: `Errors` (AWS/Lambda)
+   - **Threshold**: ≥ 2 errors in 5 minutes
+   - **Action**: Trigger alarm state
+
+3. **StateMachine Throttled Executions**:
+   - **Metric**: `ExecutionThrottled` (AWS/States)
+   - **Threshold**: ≥ 1 throttle event in 5 minutes
+   - **Action**: Trigger alarm state
+
+**Future Enhancements**:
+- Configure SNS alarm actions to send notifications
+- Create CloudWatch Dashboard with key metrics
+- Set up anomaly detection for unusual patterns
 **Lambda Integration** (Issue #7):
 The state machine now includes a Lambda function invocation step between the initial metadata write and Polly task:
 
@@ -328,8 +454,11 @@ The state machine now includes a Lambda function invocation step between the ini
    - File format validation (MP3, WAV, M4A, or TXT)
    - Audio metadata extraction (duration, bitrate, channels)
    - DynamoDB status updates from within the Lambda function
-**Error Handling Strategy**:
+
+**Error Handling Strategy** (Updated in Issue #10):
 - **Catch Blocks**: The Polly task has a `Catch` block that catches all errors (`States.ALL`)
+- **Specific Error Types**: Lambda and Polly tasks now catch specific error types (e.g., Lambda.ServiceException, Polly.ServiceFailureException)
+- **Retry Policies**: All tasks have exponential backoff retry policies configured
 - **Error Path**: On error, the workflow transitions to update DynamoDB status to FAILED and publishes a failure notification
 - **Error Context**: Error details are captured in the `$.error` result path and stored in DynamoDB for debugging
 
@@ -1096,6 +1225,28 @@ GitHub Push → CI Tests → Dev Deploy → Stage Deploy → [Manual Approval] �
 - Implement retry logic with exponential backoff
 - Add CloudWatch alarms for production monitoring
 - Create custom dashboards for pipeline visibility
+**Completed in Issue #10**: Advanced error handling, retry policies, and enhanced observability:
+- ✅ Retry logic with exponential backoff on all critical tasks
+- ✅ CloudWatch alarms for State Machine failures, Lambda errors, and throttling
+- ✅ X-Ray tracing enabled on Lambda function and State Machine
+- ✅ Structured JSON logging in Lambda for CloudWatch Logs Insights
+- ✅ Specific error type catching with targeted error routing
+
+**Error Handling Strategy**:
+
+The pipeline employs a defense-in-depth error handling strategy:
+
+1. **Retry First**: Transient errors are automatically retried with exponential backoff
+2. **Catch Specific Errors**: Different error types are caught and handled appropriately
+3. **Update Status**: DynamoDB status is updated to FAILED with error details
+4. **Notify Stakeholders**: SNS notifications sent to PipelineFailedTopic
+5. **Preserve Context**: Error information stored in DynamoDB for debugging and audit
+
+**Observability Strategy**:
+
+1. **Distributed Tracing**: X-Ray provides end-to-end request tracking across services
+2. **Structured Logging**: JSON logs enable powerful CloudWatch Logs Insights queries
+3. **Proactive Monitoring**: CloudWatch Alarms catch issues before they impact users
 - Enable AWS X-Ray distributed tracing
 - Add dead-letter queues for failed events
 - Implement circuit breaker patterns

@@ -1665,5 +1665,120 @@ namespace CdkBase.Tests
             var roles = template.FindResources("AWS::IAM::Role");
             Assert.NotEmpty(roles);
         }
+
+        // ============================================
+        // Issue #11: Core Audio Processing Logic and Output Handling Tests (TDD - FAILING FIRST)
+        // ============================================
+
+        /// <summary>
+        /// Test that Lambda has S3 GetObject permission on Input bucket for downloading files.
+        /// This is required for the Lambda to download and process audio files.
+        /// Issue #11: Audio processing - download from Input bucket
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveS3GetObjectPermissionOnInputBucket()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Lambda execution role should have S3 GetObject permission
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", Match.ArrayWith(new object[]
+                                        {
+                                            Match.StringLikeRegexp("s3:GetObject.*")
+                                        })
+                                    }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that Lambda has S3 PutObject permission on Output bucket for uploading processed files.
+        /// This is required for the Lambda to upload processed audio files.
+        /// Issue #11: Output handling - upload to Output bucket
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHaveS3PutObjectPermissionOnOutputBucket()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Lambda execution role should have S3 PutObject permission
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", Match.ArrayWith(new object[]
+                                        {
+                                            Match.StringLikeRegexp("s3:PutObject.*")
+                                        })
+                                    }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
+
+        /// <summary>
+        /// Test that Lambda has Polly SynthesizeSpeech permission for text-to-speech processing.
+        /// This is required for the Lambda to call Amazon Polly for TTS synthesis.
+        /// Issue #11: Audio processing - Polly TTS for text inputs
+        /// </summary>
+        [Fact]
+        public void Lambda_ShouldHavePollySynthesizeSpeechPermission()
+        {
+            // ARRANGE
+            var app = new App();
+            var stack = new CdkBaseStack(app, "TestStack");
+            
+            // ACT
+            var template = Template.FromStack(stack);
+            
+            // ASSERT - Lambda execution role should have Polly SynthesizeSpeech permission
+            template.HasResourceProperties("AWS::IAM::Policy", Match.ObjectLike(new Dictionary<string, object>
+            {
+                { "PolicyDocument", Match.ObjectLike(new Dictionary<string, object>
+                    {
+                        { "Statement", Match.ArrayWith(new object[]
+                            {
+                                Match.ObjectLike(new Dictionary<string, object>
+                                {
+                                    { "Action", Match.ArrayWith(new object[]
+                                        {
+                                            "polly:SynthesizeSpeech"
+                                        })
+                                    }
+                                })
+                            })
+                        }
+                    })
+                }
+            }));
+        }
     }
 }

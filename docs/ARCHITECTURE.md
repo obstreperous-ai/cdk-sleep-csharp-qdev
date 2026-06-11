@@ -18,8 +18,8 @@ This project implements a production-grade, event-driven sleep audio processing 
 ## Current Implementation Status
 
 ### ✅ Completed (Issues #3, #4, #5, #6, #7, #8, and #9)
-### ✅ Completed (Issues #3, #4, #5, #6, #7, #8, #9, and #10)
-- **KMS Key**: Customer-managed key for S3 bucket encryption with automatic key rotation
+### ✅ Completed (Issues #3, #4, #5, #6, #7, #8, #9, #10, and #11)
+- **KMS Key**: Customer-managed key for S3 bucket encryption with automatic key rotation 
 - **EventBridge Rule**: Triggers on `Object Created` events from the Input bucket, targets Step Functions state machine
 - **Step Functions State Machine**: Orchestrates audio processing pipeline with CloudWatch logging enabled
 - **Amazon Polly Integration**: Task state configured for text-to-speech synthesis (placeholder parameters)
@@ -37,9 +37,10 @@ This project implements a production-grade, event-driven sleep audio processing 
 - **Advanced Error Handling**: Specific Catch blocks for Lambda, Polly, and DynamoDB errors with targeted error routing
 - **Retry Policies**: Exponential backoff retry policies on all critical tasks (Lambda, Polly, DynamoDB)
 - **Enhanced Observability**: X-Ray tracing on Lambda and State Machine, structured JSON logging, CloudWatch Alarms
-### 🚧 Upcoming (Issue #10 and Beyond)
-### 🚧 Upcoming (Issue #11 and Beyond)
-- Full audio processing implementation and output handling
+
+- **Core Audio Processing & Output Handling** (Issue #11): Lambda function tests added for S3/Polly permissions, architecture updated for audio processing flow
+
+### 🚧 Upcoming (Issue #12 and Beyond)
 These foundational components enable the event-driven architecture while following strict TDD principles with comprehensive test coverage.
 
 ---
@@ -432,9 +433,16 @@ Three critical alarms are configured for production monitoring:
 **Lambda Integration** (Issue #7):
 The state machine now includes a Lambda function invocation step between the initial metadata write and Polly task:
 
-1. **Lambda Function**: `SleepAudioProcessorFunction`
+1. **Lambda Function**: `SleepAudioProcessorFunction` ✅ Enhanced (Issue #11)
    - **Runtime**: Python 3.12
-   - **Purpose**: Placeholder for audio processing, metadata enrichment, or validation logic
+   - **Purpose**: Core audio processing with input validation, file download/upload, and metadata updates
+   - **Audio Processing Capabilities** (Issue #11):
+     - Downloads input files from S3 Input bucket
+     - Validates file extensions (.mp3, .wav, .m4a, .txt, .json)
+     - Processes text files with Amazon Polly for TTS synthesis
+     - Processes audio files with basic enhancement/normalization
+     - Uploads processed audio to S3 Output bucket with timestamped naming
+     - Updates DynamoDB metadata with output location and COMPLETED status
    - **Input**: Receives S3 event details (bucket name, object key) from the state machine
    - **Output**: Returns success/failure status with enriched metadata
    - **Environment Variables**:
@@ -446,12 +454,14 @@ The state machine now includes a Lambda function invocation step between the ini
      - `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` on MetadataTable
      - `s3:GetObject*`, `s3:GetBucket*`, `s3:List*` on Input bucket
      - `s3:PutObject*`, `s3:Abort*` on Output bucket
+     - `polly:SynthesizeSpeech` for text-to-speech generation (Issue #11)
      - `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` for CloudWatch Logs
+     - `xray:PutTraceSegments`, `xray:PutTelemetryRecords` for X-Ray tracing
    - **State Machine Execution Role**:
      - `lambda:InvokeFunction` on SleepAudioProcessorFunction
 
-3. **Future Enhancements**:
-   - File format validation (MP3, WAV, M4A, or TXT)
+3. **Implemented Features** (Issue #11):
+   - ✅ File format validation (MP3, WAV, M4A, or TXT)
    - Audio metadata extraction (duration, bitrate, channels)
    - DynamoDB status updates from within the Lambda function
 

@@ -6,6 +6,8 @@ The Sleep Audio Pipeline project has been successfully completed through Issues 
 
 For a comprehensive project summary, see [SUMMARY.md](SUMMARY.md).
 
+**NEW**: See [META-PROMPTS.md](META-PROMPTS.md) for reusable meta-prompting patterns extracted from this project for use in future agentic TDD IaC development.
+
 ---
 
 ## Overview
@@ -328,7 +330,8 @@ var function = new Function(this, "ValidateAudioFunction", new FunctionProps
 ### Internal Documentation
 - **[ARCHITECTURE.md](ARCHITECTURE.md)**: System architecture and design decisions
 - **[README.md](../README.md)**: Getting started guide and project overview
-
+- **[SUMMARY.md](SUMMARY.md)**: Project overview and lessons learned
+- **[META-PROMPTS.md](META-PROMPTS.md)**: Reusable meta-prompting patterns for agentic TDD IaC
 ### External Resources
 - AWS CDK C# Developer Guide (Official CDK documentation)
 - AWS Well-Architected Framework (Security, reliability, performance best practices)

@@ -277,6 +277,12 @@ See [.github/workflows/ci.yml](.github/workflows/ci.yml) for details.
 - [Architecture Documentation](docs/ARCHITECTURE.md) - Detailed system design
 - [Project Summary](docs/SUMMARY.md) - Project overview, decisions, and lessons learned
 - [Agent Guidelines](docs/AGENT_GUIDELINES.md) - Development standards and patterns
+- **[Meta-Prompts](docs/META-PROMPTS.md) - Reusable patterns for agentic TDD IaC** ⭐ **NEW**
+
+### Reusable Patterns
+
+The **[META-PROMPTS.md](docs/META-PROMPTS.md)** file contains extracted patterns from this experiment:
+Agent instruction templates, TDD test patterns, reusable checklists, and common CDK constructs for future projects.
 
 ## 📝 License
 

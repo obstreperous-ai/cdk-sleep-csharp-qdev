@@ -277,9 +277,12 @@ See [.github/workflows/ci.yml](.github/workflows/ci.yml) for details.
 - [Architecture Documentation](docs/ARCHITECTURE.md) - Detailed system design
 - [Project Summary](docs/SUMMARY.md) - Project overview, decisions, and lessons learned
 - [Agent Guidelines](docs/AGENT_GUIDELINES.md) - Development standards and patterns
-- **[Meta-Prompts](docs/META-PROMPTS.md) - Reusable patterns for agentic TDD IaC** ⭐ **NEW**
+- **[Meta-Prompts](docs/META-PROMPTS.md) - Reusable patterns for agentic TDD IaC**
+- **[Experiment Design](docs/EXPERIMENT.md) - Comprehensive methodology & analysis** ⭐ **NEW**
 
-### Reusable Patterns
+### Experiment Documentation
+
+The **[EXPERIMENT.md](docs/EXPERIMENT.md)** document provides a comprehensive view of the experimental design, methodology, and preliminary findings from this multi-language, multi-AI TDD IaC study. This repository represents the **C# + Amazon Q Developer** variant of a 5 languages × 3 AI assistants experiment comparing Test-Driven Development approaches to Infrastructure as Code.
 
 The **[META-PROMPTS.md](docs/META-PROMPTS.md)** file contains extracted patterns from this experiment:
 Agent instruction templates, TDD test patterns, reusable checklists, and common CDK constructs for future projects.

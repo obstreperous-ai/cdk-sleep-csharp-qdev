@@ -1,0 +1,10 @@
+# Development and testing dependencies for Sleep Audio Processor Lambda
+
+# Testing framework
+pytest==7.4.3
+pytest-cov==4.1.0
+
+# AWS mocking (for future integration tests)
+moto[all]==4.2.9
+
+# Code quality tools

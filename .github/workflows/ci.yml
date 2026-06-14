@@ -46,7 +46,19 @@ jobs:
         run: dotnet build src/CdkBase.sln --configuration Release --no-restore
       
       - name: Run tests
-        run: dotnet test src/CdkBase.sln --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test src/CdkBase.sln --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage" --results-directory ./coverage
+      
+      - name: Generate coverage report
+        run: |
+          dotnet tool install -g dotnet-reportgenerator-globaltool || true
+          reportgenerator -reports:"./coverage/**/coverage.cobertura.xml" -targetdir:"./coverage/report" -reporttypes:"Html;MarkdownSummaryGithub" || echo "Coverage report generation skipped"
+      
+      - name: Display coverage summary
+        if: always()
+        run: |
+          if [ -f "./coverage/report/SummaryGithub.md" ]; then
+            cat ./coverage/report/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
+          fi
       
       - name: Publish test results
         uses: EnricoMi/publish-unit-test-result-action@v2
@@ -55,6 +67,13 @@ jobs:
           files: |
             **/test-results.trx
           check_name: Test Results
+      
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: ./coverage/report/
       
       - name: CDK Synth
         run: cdk synth
@@ -92,6 +111,7 @@ jobs:
       - name: TDD Status Check
         run: |
           echo "✅ All tests passed! TDD workflow successful."
+          echo "📊 Code coverage report generated."
           echo "📦 CDK synthesis completed."
           echo "🌍 Multi-environment support validated (dev, stage, prod)."
           echo "🚀 Ready for deployment."

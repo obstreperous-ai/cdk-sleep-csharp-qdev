@@ -185,6 +185,14 @@ namespace CdkBase
             InputBucket.GrantRead(AudioProcessorFunction);
             OutputBucket.GrantWrite(AudioProcessorFunction);
 
+            // Grant Lambda permissions to use Amazon Polly for text-to-speech
+            // Issue #11: Lambda needs Polly permissions for TTS processing of text files
+            AudioProcessorFunction.AddToRolePolicy(new PolicyStatement(new PolicyStatementProps
+            {
+                Actions = new[] { "polly:SynthesizeSpeech" },
+                Resources = new[] { "*" }
+            }));
+
             // Define DynamoDB PutItem task to write initial metadata
             // This task stores the initial processing record with status=PROCESSING
             var writeToDynamoDB = new DynamoPutItem(this, "WriteInitialMetadata", new DynamoPutItemProps
